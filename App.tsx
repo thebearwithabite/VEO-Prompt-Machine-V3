@@ -32,7 +32,7 @@ import {
   ShotStatus,
   VeoShot,
 } from './types';
-import metadata from '@/metadata.json'; // Import metadata to get version - CORRECTED PATH
+import { metadata } from '@/metadata'; // Import metadata to get version - CORRECTED PATH
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const API_CALL_DELAY_MS = 1200; // To stay under 60 QPM limit
@@ -205,9 +205,9 @@ const App: React.FC = () => {
         // Step 1: Generate the shot list for immediate structural feedback.
         addLogEntry('Analyzing script to create shot list...', LogType.STEP);
         const {result: shotList, tokens: shotListTokens} = await generateShotList(script);
-        summary.pro += 1;
-        summary.proTokens.input += shotListTokens.input;
-        summary.proTokens.output += shotListTokens.output;
+        summary.flash += 1; // Changed from pro to flash
+        summary.flashTokens.input += shotListTokens.input; // Changed from proTokens to flashTokens
+        summary.flashTokens.output += shotListTokens.output; // Changed from proTokens to flashTokens
         setApiCallSummary({...summary});
         addLogEntry(
           `Successfully created shot list with ${shotList.length} shots.`,
@@ -248,9 +248,9 @@ const App: React.FC = () => {
             .map((s) => `- ${s.pitch}`)
             .join('\n');
           const {result: plan, tokens: planTokens} = await generateScenePlan(sceneId, scenePitches, script);
-          summary.pro += 1;
-          summary.proTokens.input += planTokens.input;
-          summary.proTokens.output += planTokens.output;
+          summary.flash += 1; // Changed from pro to flash
+          summary.flashTokens.input += planTokens.input; // Changed from proTokens to flashTokens
+          summary.flashTokens.output += planTokens.output; // Changed from proTokens to flashTokens
           setApiCallSummary({...summary});
           generatedPlans.push(plan);
           await delay(API_CALL_DELAY_MS);
@@ -301,9 +301,9 @@ const App: React.FC = () => {
               script,
               scenePlanForShot,
             );
-            summary.pro += 1;
-            summary.proTokens.input += veoJsonTokens.input;
-            summary.proTokens.output += veoJsonTokens.output;
+            summary.flash += 1; // Changed from pro to flash
+            summary.flashTokens.input += veoJsonTokens.input; // Changed from proTokens to flashTokens
+            summary.flashTokens.output += veoJsonTokens.output; // Changed from proTokens to flashTokens
             setApiCallSummary({...summary});
             addLogEntry('VEO JSON generated successfully.', LogType.SUCCESS);
             currentShot = {
