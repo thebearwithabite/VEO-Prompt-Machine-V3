@@ -12,6 +12,7 @@ import {
 } from '@google/genai';
 import {
   IngredientImage,
+  ProjectAsset,
   ScenePlan,
   Shot,
   ShotBook,
@@ -52,6 +53,17 @@ You are a Scene Runtime Planner. Your task is to analyze a creative script and t
 Your goal is to maximize segment duration and continuity while adhering to the scene's narrative goals.
 
 You MUST follow the provided JSON schema strictly. Do not output any text, explanation, or markdown formatting outside of the single, valid JSON object.
+`;
+
+const SYSTEM_PROMPT_ASSET_EXTRACTION = `
+You are a Production Designer AI. Your task is to analyze the provided script and identify the key visual assets required for generation.
+Specifically, identify the main CHARACTERS and primary LOCATIONS/ENVIRONMENTS.
+For each asset, provide a short, reliable 'name' and a visual 'description' that could be used to prompt an image generator or help a user select a reference photo.
+
+Rules:
+1. Only identify MAJOR characters and locations that appear frequently or are visually distinct.
+2. The 'type' must be either 'character' or 'location'.
+3. Output a JSON array of objects.
 `;
 
 const SYSTEM_PROMPT_SINGLE_SHOT_JSON = `
@@ -248,9 +260,14 @@ const getImageBase64 = (response: GenerateContentResponse): string => {
     throw new Error(`Image generation blocked: ${response.promptFeedback.blockReason}`);
   }
 
-  const part = response.candidates?.[0]?.content?.parts?.[0];
-  if (part?.inlineData?.data) {
-    return part.inlineData.data;
+  // Iterate through parts to find the image, as per documentation for new models
+  const parts = response.candidates?.[0]?.content?.parts;
+  if (parts) {
+    for (const part of parts) {
+        if (part.inlineData?.data) {
+            return part.inlineData.data;
+        }
+    }
   }
 
   throw new Error('No image data found in response. The prompt may have been blocked or the response was empty.');
@@ -299,13 +316,61 @@ export const generateProjectName = async (script: string): Promise<GenerateResul
   };
 };
 
+export const extractAssetsFromScript = async (
+  script: string
+): Promise<GenerateResult<ProjectAsset[]>> => {
+  const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-pro-preview',
+    contents: script,
+    config: {
+      systemInstruction: SYSTEM_PROMPT_ASSET_EXTRACTION,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            name: { type: Type.STRING },
+            description: { type: Type.STRING },
+            type: { type: Type.STRING, enum: ['character', 'location'] },
+          },
+          required: ['name', 'description', 'type'],
+        },
+      },
+    },
+  });
+
+  const cleanedText = cleanJsonOutput(response.text);
+  const rawAssets = JSON.parse(cleanedText) as { name: string, description: string, type: 'character' | 'location' }[];
+
+  // Map to ProjectAsset with generated IDs
+  const assets: ProjectAsset[] = rawAssets.map((a) => ({
+    id: `asset-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    name: a.name,
+    description: a.description,
+    type: a.type,
+    image: null,
+  }));
+
+  return {
+    result: assets,
+    tokens: {
+      input: response.usageMetadata?.promptTokenCount || 0,
+      output: response.usageMetadata?.candidatesTokenCount || 0,
+    },
+  };
+};
+
 export const generateShotList = async (
   script: string,
 ): Promise<GenerateResult<{id: string; pitch: string}[]>> => {
   const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
 
+  // Upgraded to gemini-3-pro-preview for better breakdown analysis
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash', // Changed from gemini-2.5-pro to gemini-2.5-flash
+    model: 'gemini-3-pro-preview',
     contents: script,
     config: {
       systemInstruction: SYSTEM_PROMPT_SHOTLIST,
@@ -378,7 +443,7 @@ export const generateSceneNames = async (
     `;
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-2.5-flash', // Flash is fine for naming
         contents: prompt,
         config: {
           systemInstruction: SYSTEM_PROMPT_SCENE_NAME,
@@ -428,8 +493,9 @@ export const generateScenePlan = async (
     ---
   `;
 
+  // Upgraded to gemini-3-pro-preview for superior planning/pacing logic
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash', // Changed from gemini-2.5-pro to gemini-2.5-flash
+    model: 'gemini-3-pro-preview',
     contents: prompt,
     config: {
       systemInstruction: SYSTEM_PROMPT_SCENE_PLAN,
@@ -518,8 +584,9 @@ export const generateVeoJson = async (
     ---
   `;
 
+  // Upgraded to gemini-3-pro-preview for deepest semantic understanding of filmmaking instructions
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash', // Changed from gemini-2.5-pro to gemini-2.5-flash
+    model: 'gemini-3-pro-preview', 
     contents: prompt,
     config: {
       systemInstruction: SYSTEM_PROMPT_SINGLE_SHOT_JSON,
@@ -556,7 +623,7 @@ export const generateVeoJson = async (
 
 /**
  * Generates the text prompt that will be used to create a keyframe image.
- * This separates the prompt generation from the image generation, allowing for HIL review.
+ * Upgraded to use Gemini 3 Pro Preview to rewrite technical JSON into a lush artistic prompt.
  */
 export const generateKeyframePromptText = async (
   veoShot: VeoShot,
@@ -565,31 +632,59 @@ export const generateKeyframePromptText = async (
     throw new Error('Cannot generate keyframe prompt text without VEO JSON data.');
   }
 
-  const promptText = `Generate a single, cinematic keyframe image of the character '${veoShot.character.name}'. Style: ${veoShot.scene.visual_style}. Scene: ${veoShot.scene.context}. Action: ${veoShot.character.behavior}. Shot: ${veoShot.camera.shot_call}. Lighting: ${veoShot.scene.lighting}. When using reference images, ensure the character depicted matches the name '${veoShot.character.name}'.`;
-  
-  // For keyframe prompt text generation, we are using a simple string concatenation
-  // so token usage is purely on the prompt itself, not a model call for this specific prompt text creation step.
-  // However, we'll simulate a token count for consistency if this were to become a model call.
-  // For now, we'll just return estimated tokens based on the prompt string itself.
-  // If this *was* a model call, it would look like:
-  // const response = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: promptText });
-  // return { result: response.text, tokens: { input: response.usageMetadata?.promptTokenCount || 0, output: response.usageMetadata?.candidatesTokenCount || 0 } };
+  const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
 
-  // Since it's a client-side string concatenation, token counts for *this specific step* are zero.
-  // The cost comes from the *image generation* itself.
+  // Provide the raw JSON details
+  const technicalDetails = JSON.stringify({
+    character: veoShot.character.name,
+    description: veoShot.character.description_lock,
+    action: veoShot.character.behavior,
+    expression: veoShot.character.expression,
+    context: veoShot.scene.context,
+    lighting: veoShot.scene.lighting,
+    style: veoShot.scene.visual_style,
+    mood: veoShot.scene.mood,
+    shotType: veoShot.camera.shot_call,
+  });
+
+  const systemInstruction = `
+    You are a world-class visual prompt engineer for high-fidelity cinema generation.
+    Your task is to take the provided Technical Shot Specs (JSON) and convert them into a single, lush, descriptive image generation prompt.
+    
+    Rules:
+    1. Focus on lighting, texture, camera lens characteristics (e.g. "85mm, bokeh, soft focus"), and atmosphere.
+    2. Ensure the character's physical appearance is described clearly based on the input.
+    3. Describe the action and expression vividly.
+    4. DO NOT use JSON syntax in output. Output ONLY the raw prompt string.
+    5. Keep it under 100 words.
+  `;
+
+  const response = await ai.models.generateContent({
+      model: 'gemini-3-pro-preview',
+      contents: `Technical Shot Specs: ${technicalDetails}`,
+      config: { systemInstruction }
+  });
+
+  const promptText = response.text.trim();
+
   return {
     result: promptText,
-    tokens: { input: 0, output: 0 }, // No model call for this step, so no tokens
+    tokens: { 
+      input: response.usageMetadata?.promptTokenCount || 0, 
+      output: response.usageMetadata?.candidatesTokenCount || 0 
+    }, 
   };
 };
 
 
 /**
  * Generates the actual keyframe image using a provided prompt text and ingredient images.
+ * Upgraded to Gemini 3 Pro Image Preview for 2K resolution and aspect ratio support.
  */
 export const generateKeyframeImage = async (
   promptText: string,
   ingredientImages: IngredientImage[],
+  aspectRatio: '16:9' | '9:16' = '16:9'
 ): Promise<GenerateResult<string>> => {
   const ai = new GoogleGenAI({apiKey: process.env.API_KEY});
 
@@ -598,6 +693,10 @@ export const generateKeyframeImage = async (
   }
 
   const contentParts: Part[] = [{text: promptText}];
+  
+  // Map the user's friendly aspect ratio (16:9) to the API's format if strictly needed, 
+  // but gemini-3-pro-image-preview supports '16:9' and '9:16' directly strings.
+  
   ingredientImages.forEach((image) => {
     contentParts.push({
       inlineData: {
@@ -608,14 +707,19 @@ export const generateKeyframeImage = async (
   });
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
+    model: 'gemini-3-pro-image-preview', // Upgraded model
     contents: {parts: contentParts},
-    config: {responseModalities: [Modality.IMAGE]},
+    config: {
+      imageConfig: {
+        imageSize: '2K', // Request high quality
+        aspectRatio: aspectRatio // Pass the scene's aspect ratio
+      }
+    },
   });
 
   return {
     result: getImageBase64(response),
-    tokens: { input: 0, output: 0 }, // Image generation is not token-based for flash-image model, cost is per image.
+    tokens: { input: 0, output: 0 }, 
   };
 };
 

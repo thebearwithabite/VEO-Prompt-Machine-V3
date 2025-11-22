@@ -107,6 +107,22 @@ export interface VeoShotWrapper {
   veo_shot: VeoShot;
 }
 
+// For uploaded reference images
+export interface IngredientImage {
+  base64: string;
+  mimeType: string;
+}
+
+export type AssetType = 'character' | 'location' | 'prop' | 'style';
+
+export interface ProjectAsset {
+  id: string;
+  name: string;
+  description: string; // AI inferred description
+  type: AssetType;
+  image: IngredientImage | null; // The uploaded image
+}
+
 // The interactive shot object used in the app's state
 export interface Shot {
   id: string; // A unique ID for React keys, from shot_id
@@ -117,16 +133,18 @@ export interface Shot {
   keyframePromptText?: string; // The text prompt generated for the keyframe image
   keyframeImage?: string; // base64 string
   errorMessage?: string; // If image generation fails
-  ingredientImages?: IngredientImage[]; // base64 images used for this shot
+  
+  // New: The IDs of the assets specifically used for this shot.
+  // This replaces the old ingredientImages array which was just a copy of the global pool.
+  selectedAssetIds: string[]; 
+  
+  // Deprecated but kept for compatibility during migration if needed, 
+  // or used for one-off uploads not in the library? 
+  // Ideally we move away from this.
+  ingredientImages?: IngredientImage[]; 
 }
 
 export type ShotBook = Shot[];
-
-// For uploaded reference images
-export interface IngredientImage {
-  base64: string;
-  mimeType: string;
-}
 
 // For API call token usage and cost estimation
 export interface ApiCallSummary {

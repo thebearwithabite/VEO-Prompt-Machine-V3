@@ -113,10 +113,10 @@ export const generateMasterShotlistHtml = (
   const estimatedCost = calculateEstimatedCost(apiCallSummary);
 
   const apiSummaryHtml = `
-    <p><strong>API Calls:</strong> Pro: ${apiCallSummary.pro}, Flash: ${apiCallSummary.flash}, Image: ${apiCallSummary.image}</p>
+    <p><strong>API Calls:</strong> Gemini 3 Pro: ${apiCallSummary.pro}, Flash: ${apiCallSummary.flash}, Gemini 3 Pro Image: ${apiCallSummary.image}</p>
     <p><strong>Tokens Used:</strong></p>
     <ul class="list-disc list-inside ml-4">
-      <li>Gemini 2.5 Pro: Input ${apiCallSummary.proTokens.input.toLocaleString()} | Output ${apiCallSummary.proTokens.output.toLocaleString()}</li>
+      <li>Gemini 3 Pro Preview: Input ${apiCallSummary.proTokens.input.toLocaleString()} | Output ${apiCallSummary.proTokens.output.toLocaleString()}</li>
       <li>Gemini 2.5 Flash: Input ${apiCallSummary.flashTokens.input.toLocaleString()} | Output ${apiCallSummary.flashTokens.output.toLocaleString()}</li>
     </ul>
     <p class="text-lg font-bold mt-2">Estimated Cost: <span class="text-green-600">$${estimatedCost.toFixed(4)}</span></p>

@@ -1,5 +1,5 @@
 {
-  "name": "VEO Prompt MAchine V2",
+  "name": "VEO Prompt Machine V3",
   "description": "An interactive Director's AD that transforms creative scripts into structured, production-ready VEO 3.1 JSON prompts, complete with keyframes and collaborative editing.",
   "requestFramePermissions": [],
   "prompt": "",

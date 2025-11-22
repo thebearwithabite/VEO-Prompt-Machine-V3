@@ -7,6 +7,7 @@ import {
   ApiCallSummary,
   IngredientImage,
   LogEntry,
+  ProjectAsset,
   ScenePlan,
   Shot,
   ShotBook,
@@ -30,45 +31,33 @@ import {
   SaveIcon,
   SparklesIcon,
   XMarkIcon,
+  RectangleStackIcon
 } from './icons';
 
 interface ShotCardProps {
   shot: Shot;
   onUpdateShot: (shot: Shot) => void;
   onGenerateSpecificKeyframe: (shotId: string) => void; // Renamed from onRetryKeyframe
-  allIngredientImages: IngredientImage[];
-  onUpdateShotIngredients: (
-    shotId: string,
-    newImages: IngredientImage[],
-  ) => void;
+  allAssets: ProjectAsset[];
+  onToggleAssetForShot: (shotId: string, assetId: string) => void;
 }
 
 const ShotCard: React.FC<ShotCardProps> = ({
   shot,
   onUpdateShot,
   onGenerateSpecificKeyframe, // Renamed prop
-  allIngredientImages,
-  onUpdateShotIngredients,
+  allAssets,
+  onToggleAssetForShot,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editedJson, setEditedJson] = useState('');
   const [copyButtonText, setCopyButtonText] = useState('Copy JSON');
+  const [isEditingAssets, setIsEditingAssets] = useState(false);
 
-  const [isEditingIngredients, setIsEditingIngredients] = useState(false);
-  const [editedIngredients, setEditedIngredients] = useState<IngredientImage[]>(
-    shot.ingredientImages || [],
-  );
 
   useEffect(() => {
     setEditedJson(shot.veoJson ? JSON.stringify(shot.veoJson, null, 2) : '');
   }, [shot.veoJson]);
-
-  useEffect(() => {
-    // Update editedIngredients if shot.ingredientImages changes (e.g., from global update)
-    if (!isEditingIngredients) {
-      setEditedIngredients(shot.ingredientImages || []);
-    }
-  }, [shot.ingredientImages, isEditingIngredients]);
 
   // Define renderImagePlaceholder here
   const renderImagePlaceholder = () => {
@@ -101,37 +90,6 @@ const ShotCard: React.FC<ShotCardProps> = ({
           </div>
         );
     }
-  };
-
-  const handleEditIngredients = () => {
-    setEditedIngredients(shot.ingredientImages || []);
-    setIsEditingIngredients(true);
-  };
-
-  const handleSaveIngredients = () => {
-    onUpdateShotIngredients(shot.id, editedIngredients);
-    setIsEditingIngredients(false);
-  };
-
-  const handleCancelEditIngredients = () => {
-    setIsEditingIngredients(false);
-    setEditedIngredients(shot.ingredientImages || []); // Reset to original
-  };
-
-  const addIngredient = (image: IngredientImage) => {
-    if (editedIngredients.length < 3) {
-      setEditedIngredients((prev) => [...prev, image]);
-    }
-  };
-
-  const removeIngredient = (imageToRemove: IngredientImage) => {
-    setEditedIngredients((prev) =>
-      prev.filter((img) => img.base64 !== imageToRemove.base64),
-    );
-  };
-
-  const isIngredientSelected = (image: IngredientImage) => {
-    return editedIngredients.some((img) => img.base64 === image.base64);
   };
 
   const handleSaveEdit = () => {
@@ -207,12 +165,16 @@ const ShotCard: React.FC<ShotCardProps> = ({
     }
   };
 
-  const showIngredientEditor = isEditingIngredients || shot.status === ShotStatus.NEEDS_KEYFRAME_GENERATION;
+  // Filter assets that have images
+  const availableAssets = allAssets.filter(a => !!a.image);
+  const selectedAssetIds = shot.selectedAssetIds || [];
+  
+  const showAssetEditor = isEditingAssets || shot.status === ShotStatus.NEEDS_KEYFRAME_GENERATION;
   
   return (
     <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 md:p-6 transition-all duration-300">
       <div className="flex flex-col md:flex-row items-start gap-4 md:gap-6">
-        {/* Left Column: Image, Pitch & Ingredients */}
+        {/* Left Column: Image, Pitch & Assets */}
         <div className="w-full md:w-1/3 flex-shrink-0">
           <div className="aspect-video bg-black rounded-lg overflow-hidden border border-gray-600 mb-3 flex items-center justify-center">
             {shot.keyframeImage ? (
@@ -240,110 +202,76 @@ const ShotCard: React.FC<ShotCardProps> = ({
             {shot.pitch}
           </p>
 
-          {/* Ingredients Section */}
+          {/* Asset Selection Section */}
           <div className="mt-4">
             <div className="flex justify-between items-center mb-2">
               <h4 className="text-base font-semibold text-gray-300">
-                Ingredients Used
+                Key Assets
               </h4>
-              {!isEditingIngredients && (shot.status === ShotStatus.NEEDS_REVIEW || shot.status === ShotStatus.NEEDS_KEYFRAME_GENERATION || shot.status === ShotStatus.GENERATION_FAILED) && (
+               {!isEditingAssets && (shot.status === ShotStatus.NEEDS_REVIEW || shot.status === ShotStatus.NEEDS_KEYFRAME_GENERATION || shot.status === ShotStatus.GENERATION_FAILED) && (
                 <button
-                  onClick={handleEditIngredients}
+                  onClick={() => setIsEditingAssets(!isEditingAssets)}
                   className="text-indigo-400 hover:text-indigo-300 text-sm font-medium">
-                  Edit
+                  {isEditingAssets ? 'Done' : 'Edit'}
                 </button>
               )}
             </div>
-            {showIngredientEditor ? (
-              <div className="p-3 bg-gray-900/70 rounded-md">
-                <p className="text-xs text-gray-400 mb-3">
-                  Select up to 3 images from your uploaded pool.
-                </p>
-                <div className="flex flex-wrap gap-2 mb-3 border-b border-gray-700 pb-3">
-                  {allIngredientImages.map((image, index) => {
-                    const isSelected = isIngredientSelected(image);
-                    const isLimitReached = editedIngredients.length >= 3;
-                    return (
-                      <button
-                        key={index}
-                        onClick={() => !isSelected && addIngredient(image)}
-                        disabled={isSelected || isLimitReached}
-                        className="relative disabled:opacity-50 disabled:cursor-not-allowed group"
-                        aria-label={`Select ingredient ${index + 1}`}>
-                        <img
-                          src={`data:${image.mimeType};base64,${image.base64}`}
-                          className="w-12 h-12 object-cover rounded"
-                          alt={`Ingredient Pool ${index + 1}`}
-                        />
-                        {isSelected && (
-                          <div className="absolute inset-0 bg-green-500/70 flex items-center justify-center rounded">
-                            <CheckCircle2Icon className="w-6 h-6 text-white" />
-                          </div>
-                        )}
-                        {!isSelected && !isLimitReached && (
-                          <div className="absolute inset-0 bg-black/60 flex items-center justify-center rounded opacity-0 group-hover:opacity-100 transition-opacity">
-                            <PlusIcon className="w-6 h-6 text-white" />
-                          </div>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-                <h5 className="text-xs text-gray-400 mb-2">
-                  Selected for this shot:
-                </h5>
-                <div className="flex flex-wrap gap-2 min-h-[56px]">
-                  {editedIngredients.map((image, index) => (
-                    <div key={index} className="relative group">
-                      <img
-                        src={`data:${image.mimeType};base64,${image.base64}`}
-                        className="w-12 h-12 object-cover rounded"
-                        alt={`Selected Ingredient ${index + 1}`}
-                      />
-                      <button
-                        onClick={() => removeIngredient(image)}
-                        className="absolute -top-1 -right-1 bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                        aria-label={`Remove ingredient ${index + 1}`}>
-                        <XMarkIcon className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
-                  {editedIngredients.length === 0 && (
-                    <p className="text-xs text-gray-500 italic flex items-center h-12">
-                      No ingredients selected.
-                    </p>
-                  )}
-                </div>
-                <div className="flex gap-2 mt-3">
-                  <button
-                    onClick={handleSaveIngredients}
-                    className="text-sm bg-indigo-600 hover:bg-indigo-700 px-3 py-1 rounded-md text-white font-semibold">
-                    Save
-                  </button>
-                  <button
-                    onClick={handleCancelEditIngredients}
-                    className="text-sm bg-gray-600 hover:bg-gray-500 px-3 py-1 rounded-md text-white font-semibold">
-                    Cancel
-                  </button>
-                </div>
-              </div>
+
+            {showAssetEditor ? (
+               <div className="p-3 bg-gray-900/70 rounded-md">
+                 <p className="text-xs text-gray-400 mb-3">
+                  Select assets to include in the prompt (Max 3).
+                 </p>
+                 <div className="flex flex-wrap gap-2">
+                   {availableAssets.length === 0 && (
+                     <p className="text-xs text-gray-500 italic">No assets with images available in library.</p>
+                   )}
+                   {availableAssets.map(asset => {
+                     const isSelected = selectedAssetIds.includes(asset.id);
+                     return (
+                       <button
+                        key={asset.id}
+                        onClick={() => onToggleAssetForShot(shot.id, asset.id)}
+                        className={`relative group border-2 rounded-lg overflow-hidden w-12 h-12 transition-all ${isSelected ? 'border-green-500' : 'border-transparent opacity-60 hover:opacity-100'}`}
+                        title={asset.name}
+                       >
+                         <img 
+                           src={`data:${asset.image!.mimeType};base64,${asset.image!.base64}`} 
+                           className="w-full h-full object-cover"
+                         />
+                         {isSelected && (
+                            <div className="absolute inset-0 bg-green-500/30 flex items-center justify-center">
+                              <CheckCircle2Icon className="w-4 h-4 text-white drop-shadow-md" />
+                            </div>
+                         )}
+                       </button>
+                     )
+                   })}
+                 </div>
+                 <div className="mt-3 flex justify-end">
+                    <button onClick={() => setIsEditingAssets(false)} className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded text-white">Done</button>
+                 </div>
+               </div>
             ) : (
-              <div className="flex flex-wrap gap-2 p-3 bg-gray-900/70 rounded-md min-h-[88px]">
-                {shot.ingredientImages && shot.ingredientImages.length > 0 ? (
-                  shot.ingredientImages.map((image, index) => (
-                    <img
-                      key={index}
-                      src={`data:${image.mimeType};base64,${image.base64}`}
-                      className="w-16 h-16 object-cover rounded-md border border-gray-600"
-                      alt={`Used Ingredient ${index + 1}`}
-                    />
-                  ))
-                ) : (
-                  <p className="text-sm text-gray-500 italic self-center">
-                    No ingredients were used for this keyframe.
-                  </p>
-                )}
-              </div>
+               <div className="flex flex-wrap gap-2 p-3 bg-gray-900/70 rounded-md min-h-[60px]">
+                 {selectedAssetIds.length > 0 ? (
+                    selectedAssetIds.map(id => {
+                      const asset = allAssets.find(a => a.id === id);
+                      if (!asset || !asset.image) return null;
+                      return (
+                        <div key={id} className="relative group w-12 h-12">
+                           <img 
+                             src={`data:${asset.image.mimeType};base64,${asset.image.base64}`} 
+                             className="w-full h-full object-cover rounded-md border border-gray-600"
+                             title={asset.name}
+                           />
+                        </div>
+                      )
+                    })
+                 ) : (
+                    <p className="text-sm text-gray-500 italic self-center">No specific assets assigned.</p>
+                 )}
+               </div>
             )}
           </div>
         </div>
@@ -428,15 +356,24 @@ interface ShotBookDisplayProps {
   onNewProject: () => void;
   onUpdateShot: (shot: Shot) => void;
   onGenerateSpecificKeyframe: (shotId: string) => void; // Renamed prop
+  
+  // Props for assets
+  allAssets: ProjectAsset[];
+  onToggleAssetForShot: (shotId: string, assetId: string) => void;
+  
+  // Legacy / unused but kept for type safety if needed elsewhere
   allIngredientImages: IngredientImage[];
   onUpdateShotIngredients: (
     shotId: string,
     newImages: IngredientImage[],
   ) => void;
+
   onExportAllJsons: () => void;
-  onExportHtmlReport: () => void; // Updated signature - removed appVersion, as it's passed from App.tsx via closure.
+  onExportHtmlReport: () => void; 
   onSaveProject: () => void;
   onDownloadKeyframesZip: () => void;
+  // New prop for organizer export
+  onExportPackage: () => void;
 }
 
 const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
@@ -449,12 +386,15 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
   onNewProject,
   onUpdateShot,
   onGenerateSpecificKeyframe, // Renamed prop
-  allIngredientImages,
+  allAssets,
+  onToggleAssetForShot,
+  allIngredientImages, // Destructured but mostly unused in favor of allAssets
   onUpdateShotIngredients,
   onExportAllJsons,
   onExportHtmlReport,
   onSaveProject,
   onDownloadKeyframesZip,
+  onExportPackage, // Destructure new export prop
 }) => {
   const hasJsonForExport = shotBook.some((shot) => !!shot.veoJson);
   const hasKeyframesForExport = shotBook.some((shot) => !!shot.keyframeImage);
@@ -501,11 +441,18 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
             Save Project
           </button>
           <button
+             onClick={onExportPackage}
+             title="Export structured package for AI File Organizer."
+             className="flex items-center gap-2 px-4 py-2 bg-green-700 hover:bg-green-600 text-white font-semibold rounded-lg transition-colors text-sm border border-green-500">
+             <RectangleStackIcon className="w-4 h-4" />
+             Export Package
+          </button>
+          <button
             onClick={onExportHtmlReport} // No longer passing appVersion explicitly here
             title='Download a standalone HTML report of the shot list.'
             className="flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white font-semibold rounded-lg transition-colors text-sm">
             <FileTextIcon className="w-4 h-4" />
-            Download Report
+            Report
           </button>
           <button
             onClick={onDownloadKeyframesZip}
@@ -513,7 +460,7 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
             title={!hasKeyframesForExport ? 'No keyframes have been generated yet.' : 'Download all generated keyframes as a .zip file.'}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition-colors text-sm disabled:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50">
             <FileArchiveIcon className="w-4 h-4" />
-            Download Keyframes
+            Keyframes
           </button>
           <button
             onClick={onExportAllJsons}
@@ -521,7 +468,7 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
             title={!hasJsonForExport ? 'No shots have generated VEO JSON yet.' : 'Download all VEO JSON prompts.'}
             className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition-colors text-sm disabled:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50">
             <FileJsonIcon className="w-4 h-4" />
-            Download VEO JSONs
+            JSONs
           </button>
         </div>
       </header>
@@ -548,8 +495,8 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
                     shot={shot}
                     onUpdateShot={onUpdateShot}
                     onGenerateSpecificKeyframe={onGenerateSpecificKeyframe} // Renamed prop
-                    allIngredientImages={allIngredientImages}
-                    onUpdateShotIngredients={onUpdateShotIngredients}
+                    allAssets={allAssets}
+                    onToggleAssetForShot={onToggleAssetForShot}
                   />
                 ))}
               </div>

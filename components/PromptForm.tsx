@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import React, {useCallback, useRef, useState} from 'react';
-import {IngredientImage} from '../types';
+import {IngredientImage, ProjectAsset} from '../types';
 import {
   ArrowRightIcon,
   FileUploadIcon,
   UploadCloudIcon,
   XMarkIcon,
 } from './icons';
+import AssetLibrary from './AssetLibrary';
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
 
 // Setup PDF.js worker from a CDN. The mjs build is required for modules.
@@ -18,11 +19,18 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dis
 interface ProjectSetupFormProps {
   onGenerate: (
     script: string,
-    images: IngredientImage[],
     createKeyframes: boolean,
   ) => void;
   isGenerating: boolean;
   onLoadProject: (jsonString: string) => void;
+  
+  // Asset Library Props
+  assets: ProjectAsset[];
+  onAnalyzeScriptForAssets: (script: string) => void;
+  isAnalyzingAssets: boolean;
+  onAddAsset: (asset: ProjectAsset) => void;
+  onRemoveAsset: (id: string) => void;
+  onUpdateAssetImage: (id: string, file: File) => void;
 }
 
 // Helper to convert file to base64
@@ -38,36 +46,18 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
   onGenerate,
   isGenerating,
   onLoadProject,
+  assets,
+  onAnalyzeScriptForAssets,
+  isAnalyzingAssets,
+  onAddAsset,
+  onRemoveAsset,
+  onUpdateAssetImage,
 }) => {
   const [script, setScript] = useState('');
-  const [images, setImages] = useState<IngredientImage[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [createKeyframes, setCreateKeyframes] = useState(false); // Default to false for HIL
   const scriptFileInputRef = useRef<HTMLInputElement>(null);
   const projectFileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleImageUpload = useCallback(
-    async (event: React.ChangeEvent<HTMLInputElement>) => {
-      const files: File[] = event.target.files
-        ? Array.from(event.target.files)
-        : [];
-      if (files.length === 0) return;
-      if (images.length + files.length > 3) {
-        setError('You can upload a maximum of 3 ingredient images.');
-        return;
-      }
-      setError(null);
-
-      const newImages = await Promise.all(
-        files.map(async (file) => ({
-          base64: await fileToBase64(file),
-          mimeType: file.type,
-        })),
-      );
-      setImages((prev) => [...prev, ...newImages]);
-    },
-    [images],
-  );
 
   const handleScriptFileUpload = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -142,29 +132,25 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
     }
   };
 
-
-  const removeImage = (index: number) => {
-    setImages((prev) => prev.filter((_, i) => i !== index));
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (script.trim() && !isGenerating) {
-      onGenerate(script, images, createKeyframes);
+      onGenerate(script, createKeyframes);
     }
   };
 
   const isSubmitDisabled = !script.trim() || isGenerating;
 
   return (
-    <div className="w-full max-w-4xl p-4 md:p-8 bg-[#1f1f1f] border border-gray-700 rounded-2xl shadow-2xl">
-      <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+    <div className="w-full max-w-6xl p-4 md:p-8 bg-[#1f1f1f] border border-gray-700 rounded-2xl shadow-2xl">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-8">
+        {/* Script Section */}
         <div>
           <div className="flex justify-between items-center mb-2 flex-wrap gap-2">
             <label
               htmlFor="script-input"
               className="text-xl font-semibold text-gray-200">
-              Your Script or Treatment
+              Step 1: The Script
             </label>
             <div className="flex gap-2">
               <button
@@ -201,100 +187,71 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
             />
           </div>
           <p className="text-sm text-gray-400 mb-4">
-            Paste your script below, or upload a .txt, .md, .rtf, or .pdf file.
-            You can also load a previously saved project session.
+            Paste your script, treatment, or creative concept here.
           </p>
           <textarea
             id="script-input"
             value={script}
             onChange={(e) => setScript(e.target.value)}
-            placeholder="Paste your script, treatment, or creative concept here..."
-            className="w-full bg-gray-900/50 focus:outline-none resize-y text-base text-gray-200 placeholder-gray-500 min-h-64 rounded-xl p-4 border border-gray-600 focus:ring-2 focus:ring-indigo-500"
+            placeholder="Paste your script here..."
+            className="w-full bg-gray-900/50 focus:outline-none resize-y text-base text-gray-200 placeholder-gray-500 min-h-48 rounded-xl p-4 border border-gray-600 focus:ring-2 focus:ring-indigo-500"
             disabled={isGenerating}
           />
         </div>
 
+        {/* Asset Library Section - Replaces the old Ingredients box */}
         <div>
-          <h3 className="text-xl font-semibold text-gray-200 mb-2">
-            'Ingredient' Images (Optional)
-          </h3>
-          <p className="text-sm text-gray-400 mb-4">
-            Upload up to 3 reference images for characters, environments, or
-            items.
-          </p>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-            {images.map((image, index) => (
-              <div key={index} className="relative group">
-                <img
-                  src={`data:${image.mimeType};base64,${image.base64}`}
-                  className="w-full h-32 object-cover rounded-lg border border-gray-600"
-                  alt={`Ingredient ${index + 1}`}
-                />
-                <button
-                  type="button"
-                  onClick={() => removeImage(index)}
-                  className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <XMarkIcon className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
-            {images.length < 3 && (
-              <label className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-gray-600 rounded-lg cursor-pointer hover:bg-gray-800/50 hover:border-indigo-500 transition-colors">
-                <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                  <UploadCloudIcon className="w-8 h-8 mb-4 text-gray-500" />
-                  <p className="mb-2 text-sm text-gray-500">
-                    <span className="font-semibold">Click to upload</span>
-                  </p>
-                  <p className="text-xs text-gray-500">PNG, JPG, WEBP</p>
-                </div>
-                <input
-                  id="dropzone-file"
-                  type="file"
-                  className="hidden"
-                  onChange={handleImageUpload}
-                  multiple
-                  accept="image/png, image/jpeg, image/webp"
-                />
-              </label>
-            )}
+          <div className="flex justify-between items-center mb-2">
+             <label className="text-xl font-semibold text-gray-200">Step 2: Visual Assets</label>
           </div>
+          <AssetLibrary 
+            assets={assets}
+            onAddAsset={onAddAsset}
+            onRemoveAsset={onRemoveAsset}
+            onUpdateAssetImage={onUpdateAssetImage}
+            onAnalyzeScript={() => onAnalyzeScriptForAssets(script)}
+            isAnalyzing={isAnalyzingAssets}
+            hasScript={!!script.trim()}
+          />
           {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
         </div>
 
-        <div className="flex items-center justify-between p-4 rounded-lg bg-gray-900/50">
-          <div className="flex flex-col">
+        {/* Settings & Generate */}
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4 pt-4 border-t border-gray-700">
+          <div className="flex items-center gap-3 p-4 rounded-lg bg-gray-900/50 w-full md:w-auto">
             <label
               htmlFor="keyframes-switch"
-              className="font-semibold text-gray-200 cursor-pointer">
-              Auto-Generate Keyframes
+              className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                id="keyframes-switch"
+                className="sr-only peer"
+                checked={createKeyframes}
+                onChange={(e) => setCreateKeyframes(e.target.checked)}
+                disabled={isGenerating}
+              />
+              <div className="w-11 h-6 bg-gray-600 rounded-full peer peer-focus:ring-2 peer-focus:ring-indigo-500 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
             </label>
-            <p className="text-sm text-gray-400">
-              When on, a keyframe image is generated for each shot. When off,
-              you can generate them individually.
-            </p>
+            <div className="flex flex-col">
+              <label
+                htmlFor="keyframes-switch"
+                className="font-semibold text-gray-200 cursor-pointer text-sm">
+                Auto-Generate Keyframes
+              </label>
+              <p className="text-xs text-gray-400">
+                Generate images for all shots immediately.
+              </p>
+            </div>
           </div>
-          <label
-            htmlFor="keyframes-switch"
-            className="relative inline-flex items-center cursor-pointer">
-            <input
-              type="checkbox"
-              id="keyframes-switch"
-              className="sr-only peer"
-              checked={createKeyframes}
-              onChange={(e) => setCreateKeyframes(e.target.checked)}
-              disabled={isGenerating}
-            />
-            <div className="w-11 h-6 bg-gray-600 rounded-full peer peer-focus:ring-2 peer-focus:ring-indigo-500 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-          </label>
-        </div>
 
-        <button
-          type="submit"
-          disabled={isSubmitDisabled}
-          className="flex items-center justify-center gap-3 px-8 py-4 bg-indigo-600 text-white font-bold text-lg rounded-xl hover:bg-indigo-700 transition-colors disabled:bg-gray-600 disabled:cursor-not-allowed md:self-end">
-          <span>Generate Shot Book</span>
-          <ArrowRightIcon className="w-5 h-5" />
-        </button>
+          <button
+            type="submit"
+            disabled={isSubmitDisabled}
+            className="flex items-center justify-center gap-3 px-8 py-4 bg-indigo-600 text-white font-bold text-lg rounded-xl hover:bg-indigo-700 transition-colors disabled:bg-gray-600 disabled:cursor-not-allowed w-full md:w-auto">
+            <span>Generate Shot Book</span>
+            <ArrowRightIcon className="w-5 h-5" />
+          </button>
+        </div>
       </form>
     </div>
   );

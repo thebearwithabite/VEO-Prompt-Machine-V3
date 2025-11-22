@@ -1,0 +1,226 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+*/
+import React from 'react';
+import {AssetType, ProjectAsset} from '../types';
+import {
+  CheckCircle2Icon,
+  PlusIcon,
+  SparklesIcon,
+  UploadCloudIcon,
+  XMarkIcon,
+} from './icons';
+
+interface AssetLibraryProps {
+  assets: ProjectAsset[];
+  onAddAsset: (asset: ProjectAsset) => void;
+  onRemoveAsset: (id: string) => void;
+  onUpdateAssetImage: (id: string, file: File) => void;
+  onAnalyzeScript: () => void;
+  isAnalyzing: boolean;
+  hasScript: boolean;
+}
+
+// Helper to convert file to base64
+const fileToBase64 = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve((reader.result as string).split(',')[1]);
+    reader.onerror = (error) => reject(error);
+  });
+
+const AssetLibrary: React.FC<AssetLibraryProps> = ({
+  assets,
+  onAddAsset,
+  onRemoveAsset,
+  onUpdateAssetImage,
+  onAnalyzeScript,
+  isAnalyzing,
+  hasScript,
+}) => {
+  const handleImageUpload = async (
+    id: string,
+    event: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    onUpdateAssetImage(id, file);
+  };
+
+  const addManualAsset = (type: AssetType) => {
+    const name = prompt(`Enter name for new ${type}:`);
+    if (name) {
+      onAddAsset({
+        id: `manual-${Date.now()}`,
+        name,
+        description: 'Manually added asset',
+        type,
+        image: null,
+      });
+    }
+  };
+
+  const characters = assets.filter((a) => a.type === 'character');
+  const locations = assets.filter((a) => a.type === 'location');
+
+  return (
+    <div className="bg-gray-900/50 border border-gray-700 rounded-xl p-6">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+        <div>
+          <h3 className="text-xl font-semibold text-gray-200 flex items-center gap-2">
+            <SparklesIcon className="w-5 h-5 text-indigo-400" />
+            Asset Library
+          </h3>
+          <p className="text-sm text-gray-400 mt-1">
+            Upload images for characters and locations to ensure consistency across generated shots.
+          </p>
+        </div>
+        <button
+          onClick={onAnalyzeScript}
+          disabled={isAnalyzing || !hasScript}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap">
+          {isAnalyzing ? (
+            <>
+              <div className="w-4 h-4 border-2 border-t-transparent border-white rounded-full animate-spin"></div>
+              Analyzing Script...
+            </>
+          ) : (
+            <>
+              <SparklesIcon className="w-4 h-4" />
+              Auto-Detect Assets
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Characters Section */}
+      <div className="mb-8">
+        <div className="flex justify-between items-center mb-3">
+          <h4 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+            Characters
+          </h4>
+          <button
+            onClick={() => addManualAsset('character')}
+            type="button"
+            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+            <PlusIcon className="w-3 h-3" /> Add Character
+          </button>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {characters.map((asset) => (
+            <AssetCard
+              key={asset.id}
+              asset={asset}
+              onRemove={() => onRemoveAsset(asset.id)}
+              onUpload={(e) => handleImageUpload(asset.id, e)}
+            />
+          ))}
+          {characters.length === 0 && (
+            <div className="col-span-full py-8 text-center border-2 border-dashed border-gray-700 rounded-lg text-gray-500 text-sm">
+              No characters detected yet. Run analysis or add manually.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Locations Section */}
+      <div>
+        <div className="flex justify-between items-center mb-3">
+          <h4 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+            Locations
+          </h4>
+          <button
+            onClick={() => addManualAsset('location')}
+            type="button"
+            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+            <PlusIcon className="w-3 h-3" /> Add Location
+          </button>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {locations.map((asset) => (
+            <AssetCard
+              key={asset.id}
+              asset={asset}
+              onRemove={() => onRemoveAsset(asset.id)}
+              onUpload={(e) => handleImageUpload(asset.id, e)}
+            />
+          ))}
+          {locations.length === 0 && (
+            <div className="col-span-full py-8 text-center border-2 border-dashed border-gray-700 rounded-lg text-gray-500 text-sm">
+              No locations detected yet. Run analysis or add manually.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const AssetCard: React.FC<{
+  asset: ProjectAsset;
+  onRemove: () => void;
+  onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}> = ({asset, onRemove, onUpload}) => {
+  return (
+    <div className="group relative bg-gray-800 rounded-lg border border-gray-700 overflow-hidden flex flex-col">
+      <button
+        onClick={onRemove}
+        type="button"
+        className="absolute top-1 right-1 z-10 bg-black/60 text-white rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <XMarkIcon className="w-3 h-3" />
+      </button>
+
+      <div className="aspect-square bg-black relative">
+        {asset.image ? (
+          <img
+            src={`data:${asset.image.mimeType};base64,${asset.image.base64}`}
+            alt={asset.name}
+            className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity"
+          />
+        ) : (
+          <label className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-700/50 transition-colors">
+            <UploadCloudIcon className="w-8 h-8 text-gray-600 mb-2" />
+            <span className="text-xs text-gray-500">Upload Image</span>
+            <input
+              type="file"
+              className="hidden"
+              onChange={onUpload}
+              accept="image/png, image/jpeg, image/webp"
+            />
+          </label>
+        )}
+        {asset.image && (
+           <label className="absolute bottom-2 right-2 bg-black/50 p-1.5 rounded-full cursor-pointer hover:bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity">
+             <UploadCloudIcon className="w-4 h-4 text-white" />
+              <input
+              type="file"
+              className="hidden"
+              onChange={onUpload}
+              accept="image/png, image/jpeg, image/webp"
+            />
+           </label>
+        )}
+      </div>
+
+      <div className="p-3 flex-grow">
+        <h5 className="text-sm font-bold text-white truncate" title={asset.name}>
+          {asset.name}
+        </h5>
+        <p
+          className="text-xs text-gray-400 line-clamp-2 mt-1"
+          title={asset.description}>
+          {asset.description}
+        </p>
+      </div>
+      {asset.image && (
+        <div className="absolute top-2 left-2 bg-green-500/20 text-green-400 rounded-full p-0.5">
+            <CheckCircle2Icon className="w-4 h-4" />
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default AssetLibrary;
