@@ -57,12 +57,17 @@ You MUST follow the provided JSON schema strictly. Do not output any text, expla
 
 const SYSTEM_PROMPT_ASSET_EXTRACTION = `
 You are a Production Designer AI. Your task is to analyze the provided script and identify the key visual assets required for generation.
-Specifically, identify the main CHARACTERS and primary LOCATIONS/ENVIRONMENTS.
+Specifically, identify:
+1. Main CHARACTERS.
+2. Primary LOCATIONS/ENVIRONMENTS.
+3. Significant PROPS (objects central to the plot or action).
+4. Distinct visual STYLES (e.g., "Flashback Sequence", "Thermal Vision", "Sketch Style").
+
 For each asset, provide a short, reliable 'name' and a visual 'description' that could be used to prompt an image generator or help a user select a reference photo.
 
 Rules:
-1. Only identify MAJOR characters and locations that appear frequently or are visually distinct.
-2. The 'type' must be either 'character' or 'location'.
+1. Only identify assets that appear frequently or are visually distinct.
+2. The 'type' must be one of: 'character', 'location', 'prop', 'style'.
 3. Output a JSON array of objects.
 `;
 
@@ -77,7 +82,8 @@ YOUR TASK (AMENDED):
 5.  When creating an "extend" chain, ensure each individual \`veo_shot.scene.duration_s\` remains at or below 8 seconds, but the total \`target_duration_s\` across the entire chain reflects the runtime goal from the SCENE PLAN.
 6.  The 'shot_id' in the nested 'veo_shot' object MUST EXACTLY MATCH the provided shot_id.
 7.  If unit_type is 'extend', you MUST include a 'directorNotes' field containing a natural language summary of the segment's narrative intent, style/tone guidance, rhythm, audio emphasis, and continuity strategy. This field should be absent for 'shot' unit_type.
-8.  Your final output MUST be only the single, valid JSON object matching the WRAPPER_SCHEMA. Do not output any other text, explanation, or markdown formatting.
+8.  IMPORTANT: Your response MUST be valid JSON. Do NOT repeat the script or scene context in your output. Be concise.
+9.  Your final output MUST be only the single, valid JSON object matching the WRAPPER_SCHEMA. Do not output any other text, explanation, or markdown formatting.
 
 --- WRAPPER_SCHEMA ---
 {
@@ -230,7 +236,7 @@ const VEO_SHOT_WRAPPER_SCHEMA: Schema = {
     target_duration_s: { type: Type.INTEGER, nullable: true },
     stitching_notes: { type: Type.STRING, nullable: true },
     clip_strategy: { type: Type.STRING, nullable: true },
-    directorNotes: { type: Type.STRING, nullable: true, description: "Detailed narrative guidance for an 'extend' unit_type, including scene summary, style, tone, rhythm, audio, and continuity intentions." },
+    directorNotes: { type: Type.STRING, nullable: true, description: "Detailed narrative guidance for an 'extend' unit_type. Max 50 words." },
     veo_shot: VEO_SHOT_SCHEMA,
   },
   required: ['unit_type', 'veo_shot']
@@ -252,6 +258,47 @@ const cleanJsonOutput = (rawText: string): string => {
     cleaned = cleaned.substring(0, cleaned.length - 3);
   }
   return cleaned.trim();
+};
+
+// Simple JSON repair to handle truncated output
+const attemptJsonRepair = (jsonStr: string): string => {
+  try {
+    JSON.parse(jsonStr);
+    return jsonStr;
+  } catch (e) {
+    console.warn("JSON Parse failed, attempting simple repair...");
+    let repaired = jsonStr.trim();
+    
+    // Check for truncated trailing comma
+    if (repaired.endsWith(',')) {
+        repaired = repaired.substring(0, repaired.length - 1);
+    }
+
+    // Attempt to close objects/arrays if missing
+    // Count braces
+    let openBraces = (repaired.match(/\{/g) || []).length;
+    let closeBraces = (repaired.match(/\}/g) || []).length;
+    let openSquares = (repaired.match(/\[/g) || []).length;
+    let closeSquares = (repaired.match(/\]/g) || []).length;
+
+    while (closeSquares < openSquares) {
+        repaired += "]";
+        closeSquares++;
+    }
+    while (closeBraces < openBraces) {
+        repaired += "}";
+        closeBraces++;
+    }
+
+    try {
+        JSON.parse(repaired);
+        console.log("JSON repair successful.");
+        return repaired;
+    } catch (e2) {
+        console.warn("JSON repair failed.", e2);
+        return jsonStr; // Return original to let the main error handler catch it
+    }
+  }
 };
 
 // Helper function to extract base64 from image response
@@ -334,7 +381,7 @@ export const extractAssetsFromScript = async (
           properties: {
             name: { type: Type.STRING },
             description: { type: Type.STRING },
-            type: { type: Type.STRING, enum: ['character', 'location'] },
+            type: { type: Type.STRING, enum: ['character', 'location', 'prop', 'style'] },
           },
           required: ['name', 'description', 'type'],
         },
@@ -343,7 +390,7 @@ export const extractAssetsFromScript = async (
   });
 
   const cleanedText = cleanJsonOutput(response.text);
-  const rawAssets = JSON.parse(cleanedText) as { name: string, description: string, type: 'character' | 'location' }[];
+  const rawAssets = JSON.parse(cleanedText) as { name: string, description: string, type: 'character' | 'location' | 'prop' | 'style' }[];
 
   // Map to ProjectAsset with generated IDs
   const assets: ProjectAsset[] = rawAssets.map((a) => ({
@@ -592,10 +639,26 @@ export const generateVeoJson = async (
       systemInstruction: SYSTEM_PROMPT_SINGLE_SHOT_JSON,
       responseMimeType: 'application/json',
       responseSchema: VEO_SHOT_WRAPPER_SCHEMA,
+      // IMPORTANT: Increase max output tokens to prevent truncation on large JSONs
+      maxOutputTokens: 8192, 
+      // Reduce temperature to minimize hallucination and keep output structural
+      temperature: 0.2,
     },
   });
   const cleanedText = cleanJsonOutput(response.text);
-  const result = JSON.parse(cleanedText);
+  let result;
+  try {
+    result = JSON.parse(cleanedText);
+  } catch (e) {
+    console.warn("Initial JSON Parse Error in generateVeoJson. Attempting repair.", e);
+    const repairedText = attemptJsonRepair(cleanedText);
+    try {
+        result = JSON.parse(repairedText);
+    } catch (e2) {
+        console.error("JSON Repair failed.", e2);
+        throw new Error(`Failed to parse VEO JSON (Length: ${cleanedText.length}): ${e2}`);
+    }
+  }
 
   // Fallback for cases where the model fails to adhere to the schema
   if (!result.unit_type || !result.veo_shot) {
@@ -680,6 +743,7 @@ export const generateKeyframePromptText = async (
 /**
  * Generates the actual keyframe image using a provided prompt text and ingredient images.
  * Upgraded to Gemini 3 Pro Image Preview for 2K resolution and aspect ratio support.
+ * Includes fallback to Gemini 2.5 Flash Image (Nano) if the Pro model is overloaded.
  */
 export const generateKeyframeImage = async (
   promptText: string,
@@ -692,36 +756,72 @@ export const generateKeyframeImage = async (
     throw new Error('Cannot generate keyframe image without a text prompt.');
   }
 
-  const contentParts: Part[] = [{text: promptText}];
-  
-  // Map the user's friendly aspect ratio (16:9) to the API's format if strictly needed, 
-  // but gemini-3-pro-image-preview supports '16:9' and '9:16' directly strings.
-  
-  ingredientImages.forEach((image) => {
-    contentParts.push({
-      inlineData: {
-        data: image.base64,
-        mimeType: image.mimeType,
-      },
+  // 1. Try Gemini 3 Pro Image Preview (High Quality, Supports Ref Images)
+  try {
+    const contentParts: Part[] = [{text: promptText}];
+    
+    ingredientImages.forEach((image) => {
+        contentParts.push({
+        inlineData: {
+            data: image.base64,
+            mimeType: image.mimeType,
+        },
+        });
     });
-  });
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-image-preview', // Upgraded model
-    contents: {parts: contentParts},
-    config: {
-      imageConfig: {
-        imageSize: '2K', // Request high quality
-        aspectRatio: aspectRatio // Pass the scene's aspect ratio
-      }
-    },
-  });
+    const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-image-preview', // Upgraded model
+        contents: {parts: contentParts},
+        config: {
+        imageConfig: {
+            imageSize: '2K', // Request high quality
+            aspectRatio: aspectRatio // Pass the scene's aspect ratio
+        }
+        },
+    });
 
-  return {
-    result: getImageBase64(response),
-    tokens: { input: 0, output: 0 }, 
-  };
+    return {
+        result: getImageBase64(response),
+        tokens: { input: 0, output: 0 }, 
+    };
+
+  } catch (error: any) {
+      console.warn("Gemini 3 Pro Image generation failed. Attempting fallback to Gemini 2.5 Flash Image (Nano).", error);
+      
+      // 2. Fallback to Gemini 2.5 Flash Image (Nano)
+      // This maintains the ability to use reference images (multimodal input), unlike Imagen text-only.
+      try {
+        const contentParts: Part[] = [{text: promptText}];
+    
+        ingredientImages.forEach((image) => {
+            contentParts.push({
+            inlineData: {
+                data: image.base64,
+                mimeType: image.mimeType,
+            },
+            });
+        });
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image', 
+            contents: {parts: contentParts},
+            config: {
+                imageConfig: {
+                    // Flash Image supports aspectRatio, but NOT 'imageSize'
+                    aspectRatio: aspectRatio,
+                }
+            },
+        });
+        
+        return {
+            result: getImageBase64(response),
+            tokens: { input: 0, output: 0 },
+        };
+
+    } catch (fallbackError: any) {
+            console.error("Gemini 2.5 Flash Image fallback also failed.", fallbackError);
+            // If fallback fails, throw the original error to show the user the root cause (or the fallback error)
+            throw new Error(`Image generation failed (Primary & Fallback). Primary Error: ${error.message}`);
+    }
+  }
 };
-
-// Renamed for clarity since generateKeyframe is now generateKeyframeImage
-const getImageBase664 = getImageBase64;

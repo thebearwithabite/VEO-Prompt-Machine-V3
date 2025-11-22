@@ -123,20 +123,36 @@ const App: React.FC = () => {
 
     if (hasUnsavedWork) {
       try {
+        // OPTIMIZATION: Browser LocalStorage has a limit (usually 5MB).
+        // Saving base64 images here will crash the app with QuotaExceededError.
+        // We must strip the heavy image data from the auto-save state.
+        // Users must use "Save Project" to keep images.
+        
+        const assetsLite = assets.map(a => ({
+            ...a,
+            image: null // Strip asset image for auto-save
+        }));
+
+        const shotBookLite = shotBook?.map(s => ({
+            ...s,
+            keyframeImage: undefined // Strip keyframe image for auto-save
+        }));
+
         const stateToSave = {
           appState,
-          shotBook,
+          shotBook: shotBookLite,
           errorMessage,
           projectName,
           scenePlans,
-          assets, // Save assets
+          assets: assetsLite,
           lastPrompt,
           logEntries,
           apiCallSummary,
         };
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stateToSave));
       } catch (error) {
-        console.error('Failed to save state to localStorage:', error);
+        // Just in case it still fails, log it but don't crash
+        console.warn('Failed to save state to localStorage (Quota Exceeded). Session data not persisted.', error);
       }
     }
   }, [
@@ -385,16 +401,23 @@ const App: React.FC = () => {
             // Check if character name or scene context matches any assets
             const assignedAssetIds: string[] = [];
             
-            // Simple fuzzy match logic
             assets.forEach(asset => {
                 const nameLower = asset.name.toLowerCase();
                 const charName = veoJson.veo_shot.character.name.toLowerCase();
                 const context = veoJson.veo_shot.scene.context.toLowerCase();
+                const behavior = veoJson.veo_shot.character.behavior.toLowerCase();
+                const visualStyle = veoJson.veo_shot.scene.visual_style.toLowerCase();
                 
                 if (asset.type === 'character' && charName.includes(nameLower)) {
                     assignedAssetIds.push(asset.id);
                 }
                 if (asset.type === 'location' && context.includes(nameLower)) {
+                    assignedAssetIds.push(asset.id);
+                }
+                if (asset.type === 'prop' && (context.includes(nameLower) || behavior.includes(nameLower))) {
+                    assignedAssetIds.push(asset.id);
+                }
+                if (asset.type === 'style' && visualStyle.includes(nameLower)) {
                     assignedAssetIds.push(asset.id);
                 }
             });
@@ -692,13 +715,16 @@ const App: React.FC = () => {
       // Manually update local storage to reflect the cleared state but kept assets
       // This prevents the previous massive state from reloading, but keeps the assets key.
        try {
+        // Strip images from asset persistence in LS as well
+        const assetsLite = assets.map(a => ({ ...a, image: null }));
+        
         const stateToSave = {
           appState: AppState.IDLE,
           shotBook: null,
           errorMessage: null,
           projectName: null,
           scenePlans: null,
-          assets: assets, // Preserved
+          assets: assetsLite, // Preserved but stripped of images
           lastPrompt: null,
           logEntries: [],
           apiCallSummary: {
@@ -709,7 +735,10 @@ const App: React.FC = () => {
         };
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stateToSave));
       } catch (error) {
-        console.error('Failed to update local storage on new project:', error);
+        console.warn('Storage full or broken, clearing storage completely to ensure new project loads correctly.');
+        // If saving the "clean" state fails (likely due to quota from existing massive state),
+        // we must remove the key entirely so the next load doesn't bring back the old massive state.
+        localStorage.removeItem(LOCAL_STORAGE_KEY);
       }
     }
   };
@@ -763,88 +792,105 @@ const App: React.FC = () => {
   // NEW: Structured Export for External Organizers
   const handleExportPackage = async () => {
     if (!shotBook) return;
-    const zip = new JSZip();
-    const root = zip.folder(projectName || "New_Project");
-
-    // 1. Assets Folder
-    const assetsFolder = root.folder("Assets");
-    
-    // Create type subfolders
-    const charFolder = assetsFolder.folder("Characters");
-    const locFolder = assetsFolder.folder("Locations");
-    const otherFolder = assetsFolder.folder("Other");
-
-    assets.forEach(asset => {
-        let targetFolder = otherFolder;
-        if (asset.type === 'character') targetFolder = charFolder;
-        if (asset.type === 'location') targetFolder = locFolder;
-
-        // Save Image
-        if (asset.image) {
-            const ext = asset.image.mimeType.split('/')[1] || 'png';
-            const safeName = asset.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-            targetFolder.file(`${safeName}.${ext}`, asset.image.base64, {base64: true});
-            
-            // Save Sidecar Metadata (Perfect for AI Organizers)
-            const metadata = {
-                name: asset.name,
-                description: asset.description,
-                type: asset.type,
-                veo_context: "VEO Prompt Machine Asset",
-                id: asset.id
-            };
-            targetFolder.file(`${safeName}.json`, JSON.stringify(metadata, null, 2));
-        }
-    });
-
-    // 2. Source Script
-    if (lastPrompt?.script) {
-        root.folder("Source").file("script.txt", lastPrompt.script);
+    if (typeof JSZip === 'undefined') {
+        alert('Export library (JSZip) not loaded. Please check your internet connection and reload.');
+        return;
     }
+    try {
+        const zip = new JSZip();
+        const root = zip.folder(projectName || "New_Project");
 
-    // 3. Production Data
-    const prodFolder = root.folder("Production");
-    prodFolder.file("shot_list.json", JSON.stringify(shotBook, null, 2));
-    
-    // Save individual VEO JSONs
-    const promptsFolder = prodFolder.folder("Prompts");
-    shotBook.forEach(shot => {
-        if (shot.veoJson) {
-            promptsFolder.file(`${shot.id}.json`, JSON.stringify(shot.veoJson, null, 2));
+        // 1. Assets Folder
+        const assetsFolder = root.folder("Assets");
+        
+        // Create type subfolders
+        const charFolder = assetsFolder.folder("Characters");
+        const locFolder = assetsFolder.folder("Locations");
+        const otherFolder = assetsFolder.folder("Other");
+
+        assets.forEach(asset => {
+            let targetFolder = otherFolder;
+            if (asset.type === 'character') targetFolder = charFolder;
+            if (asset.type === 'location') targetFolder = locFolder;
+
+            // Save Image
+            if (asset.image) {
+                const ext = asset.image.mimeType.split('/')[1] || 'png';
+                const safeName = asset.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                targetFolder.file(`${safeName}.${ext}`, asset.image.base64, {base64: true});
+                
+                // Save Sidecar Metadata (Perfect for AI Organizers)
+                const metadata = {
+                    name: asset.name,
+                    description: asset.description,
+                    type: asset.type,
+                    veo_context: "VEO Prompt Machine Asset",
+                    id: asset.id
+                };
+                targetFolder.file(`${safeName}.json`, JSON.stringify(metadata, null, 2));
+            }
+        });
+
+        // 2. Source Script
+        if (lastPrompt?.script) {
+            root.folder("Source").file("script.txt", lastPrompt.script);
         }
-    });
 
-    const content = await zip.generateAsync({type: "blob"});
-    const url = URL.createObjectURL(content);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${projectName || 'project'}_organizer_package.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+        // 3. Production Data
+        const prodFolder = root.folder("Production");
+        prodFolder.file("shot_list.json", JSON.stringify(shotBook, null, 2));
+        
+        // Save individual VEO JSONs
+        const promptsFolder = prodFolder.folder("Prompts");
+        shotBook.forEach(shot => {
+            if (shot.veoJson) {
+                promptsFolder.file(`${shot.id}.json`, JSON.stringify(shot.veoJson, null, 2));
+            }
+        });
+
+        const content = await zip.generateAsync({type: "blob"});
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${projectName || 'project'}_organizer_package.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error("Export failed:", e);
+        alert("Failed to create export package. See console for details.");
+    }
   };
 
   const handleExportAllJsons = async () => {
     if (!shotBook) return;
-    const zip = new JSZip();
-    const folder = zip.folder("veo_jsons");
-    
-    shotBook.forEach((shot) => {
-        if (shot.veoJson) {
-            folder.file(`${shot.id}.json`, JSON.stringify(shot.veoJson, null, 2));
-        }
-    });
-    
-    const content = await zip.generateAsync({type: "blob"});
-    const url = URL.createObjectURL(content);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${projectName || 'project'}_veo_jsons.zip`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    if (typeof JSZip === 'undefined') {
+        alert('Export library (JSZip) not loaded. Please check your internet connection and reload.');
+        return;
+    }
+    try {
+        const zip = new JSZip();
+        const folder = zip.folder("veo_jsons");
+        
+        shotBook.forEach((shot) => {
+            if (shot.veoJson) {
+                folder.file(`${shot.id}.json`, JSON.stringify(shot.veoJson, null, 2));
+            }
+        });
+        
+        const content = await zip.generateAsync({type: "blob"});
+        const url = URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${projectName || 'project'}_veo_jsons.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error("Export JSONs failed:", e);
+    }
   };
 
   const handleExportHtmlReport = () => {
@@ -868,31 +914,39 @@ const App: React.FC = () => {
   
   const handleDownloadKeyframesZip = async () => {
       if (!shotBook) return;
-      const zip = new JSZip();
-      const folder = zip.folder("keyframes");
-      
-      let count = 0;
-      shotBook.forEach(shot => {
-          if (shot.keyframeImage) {
-              folder.file(`${shot.id}.png`, shot.keyframeImage, {base64: true});
-              count++;
-          }
-      });
-      
-      if (count === 0) {
-          alert("No keyframes to download.");
-          return;
+      if (typeof JSZip === 'undefined') {
+        alert('Export library (JSZip) not loaded. Please check your internet connection and reload.');
+        return;
       }
+      try {
+          const zip = new JSZip();
+          const folder = zip.folder("keyframes");
+          
+          let count = 0;
+          shotBook.forEach(shot => {
+              if (shot.keyframeImage) {
+                  folder.file(`${shot.id}.png`, shot.keyframeImage, {base64: true});
+                  count++;
+              }
+          });
+          
+          if (count === 0) {
+              alert("No keyframes to download.");
+              return;
+          }
 
-      const content = await zip.generateAsync({type: "blob"});
-      const url = URL.createObjectURL(content);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${projectName || 'project'}_keyframes.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+          const content = await zip.generateAsync({type: "blob"});
+          const url = URL.createObjectURL(content);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${projectName || 'project'}_keyframes.zip`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+      } catch (e) {
+          console.error("Export keyframes failed:", e);
+      }
   }
 
 

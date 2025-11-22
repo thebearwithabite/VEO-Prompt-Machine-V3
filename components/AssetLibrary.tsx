@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-import React from 'react';
+import React, { useState } from 'react';
 import {AssetType, ProjectAsset} from '../types';
 import {
   CheckCircle2Icon,
@@ -10,6 +10,7 @@ import {
   SparklesIcon,
   UploadCloudIcon,
   XMarkIcon,
+  ClipboardDocumentIcon,
 } from './icons';
 
 interface AssetLibraryProps {
@@ -40,6 +41,8 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
   isAnalyzing,
   hasScript,
 }) => {
+  const [allCopied, setAllCopied] = useState(false);
+
   const handleImageUpload = async (
     id: string,
     event: React.ChangeEvent<HTMLInputElement>,
@@ -62,8 +65,24 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
     }
   };
 
-  const characters = assets.filter((a) => a.type === 'character');
-  const locations = assets.filter((a) => a.type === 'location');
+  const handleCopyAllAssets = () => {
+    if (assets.length === 0) return;
+    
+    const text = assets.map(a => 
+      `[${a.type.toUpperCase()}]\nName: ${a.name}\nDescription: ${a.description}`
+    ).join('\n\n');
+
+    navigator.clipboard.writeText(text);
+    setAllCopied(true);
+    setTimeout(() => setAllCopied(false), 2000);
+  };
+
+  const sections: {type: AssetType, label: string}[] = [
+    {type: 'character', label: 'Characters'},
+    {type: 'location', label: 'Locations'},
+    {type: 'prop', label: 'Props'},
+    {type: 'style', label: 'Styles'},
+  ];
 
   return (
     <div className="bg-gray-900/50 border border-gray-700 rounded-xl p-6">
@@ -74,86 +93,69 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
             Asset Library
           </h3>
           <p className="text-sm text-gray-400 mt-1">
-            Upload images for characters and locations to ensure consistency across generated shots.
+            Upload images for characters, locations, props, and styles to ensure consistency across generated shots.
           </p>
         </div>
-        <button
-          onClick={onAnalyzeScript}
-          disabled={isAnalyzing || !hasScript}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap">
-          {isAnalyzing ? (
-            <>
-              <div className="w-4 h-4 border-2 border-t-transparent border-white rounded-full animate-spin"></div>
-              Analyzing Script...
-            </>
-          ) : (
-            <>
-              <SparklesIcon className="w-4 h-4" />
-              Auto-Detect Assets
-            </>
-          )}
-        </button>
-      </div>
-
-      {/* Characters Section */}
-      <div className="mb-8">
-        <div className="flex justify-between items-center mb-3">
-          <h4 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
-            Characters
-          </h4>
-          <button
-            onClick={() => addManualAsset('character')}
-            type="button"
-            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
-            <PlusIcon className="w-3 h-3" /> Add Character
+        <div className="flex gap-2">
+           <button
+            onClick={handleCopyAllAssets}
+            disabled={assets.length === 0}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap">
+             {allCopied ? <CheckCircle2Icon className="w-4 h-4 text-green-400" /> : <ClipboardDocumentIcon className="w-4 h-4" />}
+             Copy All Descriptions
           </button>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {characters.map((asset) => (
-            <AssetCard
-              key={asset.id}
-              asset={asset}
-              onRemove={() => onRemoveAsset(asset.id)}
-              onUpload={(e) => handleImageUpload(asset.id, e)}
-            />
-          ))}
-          {characters.length === 0 && (
-            <div className="col-span-full py-8 text-center border-2 border-dashed border-gray-700 rounded-lg text-gray-500 text-sm">
-              No characters detected yet. Run analysis or add manually.
-            </div>
-          )}
+          <button
+            onClick={onAnalyzeScript}
+            disabled={isAnalyzing || !hasScript}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap">
+            {isAnalyzing ? (
+              <>
+                <div className="w-4 h-4 border-2 border-t-transparent border-white rounded-full animate-spin"></div>
+                Analyzing Script...
+              </>
+            ) : (
+              <>
+                <SparklesIcon className="w-4 h-4" />
+                Auto-Detect Assets
+              </>
+            )}
+          </button>
         </div>
       </div>
 
-      {/* Locations Section */}
-      <div>
-        <div className="flex justify-between items-center mb-3">
-          <h4 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
-            Locations
-          </h4>
-          <button
-            onClick={() => addManualAsset('location')}
-            type="button"
-            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
-            <PlusIcon className="w-3 h-3" /> Add Location
-          </button>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-          {locations.map((asset) => (
-            <AssetCard
-              key={asset.id}
-              asset={asset}
-              onRemove={() => onRemoveAsset(asset.id)}
-              onUpload={(e) => handleImageUpload(asset.id, e)}
-            />
-          ))}
-          {locations.length === 0 && (
-            <div className="col-span-full py-8 text-center border-2 border-dashed border-gray-700 rounded-lg text-gray-500 text-sm">
-              No locations detected yet. Run analysis or add manually.
+      {sections.map((section) => {
+        const sectionAssets = assets.filter((a) => a.type === section.type);
+        return (
+          <div key={section.type} className="mb-8 last:mb-0">
+            <div className="flex justify-between items-center mb-3">
+              <h4 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+                {section.label}
+              </h4>
+              <button
+                onClick={() => addManualAsset(section.type)}
+                type="button"
+                className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
+                <PlusIcon className="w-3 h-3" /> Add {section.label.slice(0, -1)}
+              </button>
             </div>
-          )}
-        </div>
-      </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {sectionAssets.map((asset) => (
+                <AssetCard
+                  key={asset.id}
+                  asset={asset}
+                  onRemove={() => onRemoveAsset(asset.id)}
+                  onUpload={(e) => handleImageUpload(asset.id, e)}
+                />
+              ))}
+              {sectionAssets.length === 0 && (
+                <div className="col-span-full py-8 text-center border-2 border-dashed border-gray-700 rounded-lg text-gray-500 text-sm">
+                  No {section.label.toLowerCase()} detected yet. Run analysis or add manually.
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 };
@@ -163,6 +165,18 @@ const AssetCard: React.FC<{
   onRemove: () => void;
   onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }> = ({asset, onRemove, onUpload}) => {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyDescription = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Copy both name and description for context
+    const textToCopy = `Name: ${asset.name}\nDescription: ${asset.description}`;
+    navigator.clipboard.writeText(textToCopy);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <div className="group relative bg-gray-800 rounded-lg border border-gray-700 overflow-hidden flex flex-col">
       <button
@@ -204,15 +218,23 @@ const AssetCard: React.FC<{
         )}
       </div>
 
-      <div className="p-3 flex-grow">
+      <div className="p-3 flex-grow flex flex-col">
         <h5 className="text-sm font-bold text-white truncate" title={asset.name}>
           {asset.name}
         </h5>
-        <p
-          className="text-xs text-gray-400 line-clamp-2 mt-1"
-          title={asset.description}>
-          {asset.description}
-        </p>
+        <div className="flex items-start justify-between gap-2 mt-1 flex-1">
+            <p
+            className="text-xs text-gray-400 line-clamp-3"
+            title={asset.description}>
+            {asset.description}
+            </p>
+             <button
+                onClick={handleCopyDescription}
+                className="text-gray-500 hover:text-white transition-colors flex-shrink-0"
+                title="Copy Name & Description">
+                {copied ? <CheckCircle2Icon className="w-3 h-3 text-green-400" /> : <ClipboardDocumentIcon className="w-3 h-3" />}
+            </button>
+        </div>
       </div>
       {asset.image && (
         <div className="absolute top-2 left-2 bg-green-500/20 text-green-400 rounded-full p-0.5">
