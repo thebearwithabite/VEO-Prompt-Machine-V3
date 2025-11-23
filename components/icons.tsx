@@ -34,6 +34,8 @@ import {
   UploadCloud,
   X,
   XCircle,
+  AlertTriangle,
+  StopCircle, // Import StopCircle
 } from 'lucide-react';
 
 const defaultProps = {
@@ -160,6 +162,13 @@ export const FileJsonIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => 
     <FileJson {...defaultProps} {...props} />
 );
 
+export const AlertTriangleIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+    <AlertTriangle {...defaultProps} {...props} />
+);
+
+export const StopCircleIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <StopCircle {...defaultProps} {...props} />
+);
 
 // This icon had a different stroke width in the original file, so we preserve it.
 export const CurvedArrowDownIcon: React.FC<React.SVGProps<SVGSVGElement>> = (

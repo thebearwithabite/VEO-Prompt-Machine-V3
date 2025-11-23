@@ -31,7 +31,9 @@ import {
   SaveIcon,
   SparklesIcon,
   XMarkIcon,
-  RectangleStackIcon
+  RectangleStackIcon,
+  InfoIcon, // New import
+  StopCircleIcon, // New import
 } from './icons';
 
 interface ShotCardProps {
@@ -374,6 +376,11 @@ interface ShotBookDisplayProps {
   onDownloadKeyframesZip: () => void;
   // New prop for organizer export
   onExportPackage: () => void;
+  onShowStorageInfo: () => void; // New Prop
+  
+  // New props for stop processing
+  isProcessing: boolean;
+  onStopGeneration: () => void;
 }
 
 const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
@@ -395,6 +402,9 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
   onSaveProject,
   onDownloadKeyframesZip,
   onExportPackage, // Destructure new export prop
+  onShowStorageInfo, // Destructure new prop
+  isProcessing,
+  onStopGeneration,
 }) => {
   const hasJsonForExport = shotBook.some((shot) => !!shot.veoJson);
   const hasKeyframesForExport = shotBook.some((shot) => !!shot.keyframeImage);
@@ -422,12 +432,32 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
       {/* Header */}
       <header className="flex-shrink-0 bg-[#1f1f1f] border border-gray-700 rounded-2xl shadow-lg p-4 flex flex-col md:flex-row justify-between items-center gap-4">
         <div className="text-center md:text-left">
-          <p className="text-sm text-gray-400">Project</p>
+          <div className="flex items-center gap-2 justify-center md:justify-start">
+            <p className="text-sm text-gray-400">Project</p>
+            <button 
+                onClick={onShowStorageInfo}
+                className="text-gray-500 hover:text-indigo-400 transition-colors p-1 rounded-full hover:bg-white/5"
+                title="Storage & Sharing Info"
+            >
+                <InfoIcon className="w-4 h-4" />
+            </button>
+          </div>
           <h2 className="text-2xl font-bold text-white">
             {projectName || 'Untitled Project'}
           </h2>
         </div>
         <div className="flex flex-wrap gap-3 justify-center">
+          {isProcessing && (
+             <button
+                onClick={onStopGeneration}
+                className="flex items-center gap-2 px-4 py-2 bg-red-900/80 hover:bg-red-800 text-red-100 font-semibold rounded-lg transition-colors text-sm border border-red-700 animate-pulse"
+                title="Stop the current generation process."
+             >
+                <StopCircleIcon className="w-4 h-4" />
+                Stop Generation
+             </button>
+          )}
+
           <button
             onClick={onNewProject}
             className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white font-semibold rounded-lg transition-colors text-sm">

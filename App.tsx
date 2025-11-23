@@ -3,10 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 declare const JSZip: any; // Declare JSZip as a global variable, as the CDN-loaded script likely exposes it globally.
-import React, {useCallback, useEffect, useState} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
 import ApiKeyDialog from './components/ApiKeyDialog';
 import LoadingIndicator from './components/LoadingIndicator';
 import ProjectSetupForm from './components/PromptForm';
+import ConfirmDialog from './components/ConfirmDialog';
+import StorageInfoDialog from './components/StorageInfoDialog';
 // Add missing import for ShotBookDisplay component
 import ShotBookDisplay from './components/VideoResult';
 import {
@@ -58,9 +60,17 @@ const App: React.FC = () => {
   const [projectName, setProjectName] = useState<string | null>(null);
   const [scenePlans, setScenePlans] = useState<ScenePlan[] | null>(null);
   
+  // Dialog States
+  const [showNewProjectDialog, setShowNewProjectDialog] = useState(false);
+  const [showStorageInfoDialog, setShowStorageInfoDialog] = useState(false);
+
   // New State for Assets
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [isAnalyzingAssets, setIsAnalyzingAssets] = useState(false);
+
+  // Stop Generation Logic
+  const stopGenerationRef = useRef(false);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const [lastPrompt, setLastPrompt] = useState<{
     script: string;
@@ -234,6 +244,9 @@ const App: React.FC = () => {
      }
   };
 
+  const handleStopGeneration = () => {
+      stopGenerationRef.current = true;
+  };
 
   const handleGenerate = useCallback(
     async (
@@ -274,7 +287,13 @@ const App: React.FC = () => {
         LogType.INFO,
       );
 
+      // RESET STOP STATE
+      stopGenerationRef.current = false;
+      setIsProcessing(true);
+
       try {
+        if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
+
         // Step 0: Generate Project Name
         addLogEntry('Generating a project name...', LogType.STEP);
         const {result: generatedName, tokens: nameTokens} = await generateProjectName(script);
@@ -288,6 +307,8 @@ const App: React.FC = () => {
           LogType.SUCCESS,
         );
         await delay(API_CALL_DELAY_MS);
+        
+        if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
 
         // Step 1: Generate the shot list for immediate structural feedback.
         addLogEntry('Analyzing script to create shot list...', LogType.STEP);
@@ -302,6 +323,8 @@ const App: React.FC = () => {
           LogType.SUCCESS,
         );
         await delay(API_CALL_DELAY_MS);
+
+        if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
 
         // Step 1.5: Generate descriptive scene names
         addLogEntry('Generating descriptive scene names...', LogType.STEP);
@@ -331,6 +354,7 @@ const App: React.FC = () => {
 
         const generatedPlans: ScenePlan[] = [];
         for (const [sceneId, shotsInScene] of scenes.entries()) {
+          if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
           addLogEntry(`Planning scene: ${sceneId}...`, LogType.INFO);
           const scenePitches = shotsInScene
             .map((s) => `- ${s.pitch}`)
@@ -361,11 +385,19 @@ const App: React.FC = () => {
           };
         });
 
+        if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
+
         setShotBook(initialShotBook);
         setAppState(AppState.SUCCESS); // Show the shot book UI immediately
 
         // Step 2 & 3: Sequentially process each shot completely (JSON then Keyframe).
         for (const initialShot of initialShotBook) {
+          // CHECK FOR STOP SIGNAL
+          if (stopGenerationRef.current) {
+              addLogEntry("Generation stopped by user.", LogType.INFO);
+              break;
+          }
+
           let currentShot: Shot = {...initialShot};
           addLogEntry(`Processing Shot: ${currentShot.id}`, LogType.INFO);
 
@@ -460,6 +492,12 @@ const App: React.FC = () => {
             continue; // Skip to the next shot in the loop if JSON fails
           }
 
+          // Check for stop before prompt generation
+          if (stopGenerationRef.current) {
+              addLogEntry("Generation stopped by user.", LogType.INFO);
+              break;
+          }
+
           // Generate Keyframe Prompt Text
           try {
             setShotBook((current) =>
@@ -519,6 +557,13 @@ const App: React.FC = () => {
 
           // If 'createKeyframes' is true, automatically generate the image
           if (createKeyframes) {
+            
+            // Check for stop before image generation
+            if (stopGenerationRef.current) {
+                addLogEntry("Generation stopped by user.", LogType.INFO);
+                break;
+            }
+
             // Generate Keyframe Image for the current shot
             try {
               setShotBook((current) =>
@@ -586,15 +631,30 @@ const App: React.FC = () => {
 
         addLogEntry('Processing complete.', LogType.SUCCESS);
       } catch (error) {
-        console.error('Process failed:', error);
-        setErrorMessage(
-          error instanceof Error ? error.message : 'An unexpected error occurred.',
-        );
-        setAppState(AppState.ERROR);
-        addLogEntry('Process terminated due to error.', LogType.ERROR);
+        // If user stopped, we don't want to set Error state, just log it.
+        if (stopGenerationRef.current) {
+             console.log("Generation flow aborted by user.");
+             // If we are not yet in SUCCESS state (i.e. during initial setup), 
+             // we might want to go back to IDLE or keep what we have.
+             // But since appState is SUCCESS before the loop, we are fine.
+             // If stopped during initial analysis (before SUCCESS), we go to ERROR or IDLE.
+             if (appState !== AppState.SUCCESS) {
+                  setErrorMessage("Generation cancelled by user.");
+                  setAppState(AppState.IDLE);
+             }
+        } else {
+            console.error('Process failed:', error);
+            setErrorMessage(
+            error instanceof Error ? error.message : 'An unexpected error occurred.',
+            );
+            setAppState(AppState.ERROR);
+            addLogEntry('Process terminated due to error.', LogType.ERROR);
+        }
+      } finally {
+          setIsProcessing(false);
       }
     },
-    [assets, addLogEntry],
+    [assets, addLogEntry, appState],
   );
 
   // Handle user manually requesting a specific keyframe regeneration
@@ -701,50 +761,64 @@ const App: React.FC = () => {
       });
   };
 
-  // UPDATED: New Project now preserves assets by default to solve "persistence" question.
-  const handleNewProject = () => {
-    if (confirm('Start a new project?\n\nClick OK to clear the script and shots but KEEP your Asset Library.\nTo clear everything including assets, please manually refresh the page after clicking OK.')) {
-      setAppState(AppState.IDLE);
-      setShotBook(null);
-      setErrorMessage(null);
-      setProjectName(null);
-      setScenePlans(null);
-      setLogEntries([]);
-      // setAssets([]); <--- We do NOT clear assets anymore, allowing the library to persist.
+  const handleRequestNewProject = () => {
+    setShowNewProjectDialog(true);
+  };
+
+  const confirmNewProject = () => {
+    stopGenerationRef.current = true; // Force stop any running loop
+    setIsProcessing(false);
+    
+    setAppState(AppState.IDLE);
+    setShotBook(null);
+    setErrorMessage(null);
+    setProjectName(null);
+    setScenePlans(null);
+    setLastPrompt(null); // Ensure last prompt is cleared
+    setLogEntries([]);
+    setApiCallSummary({
+      pro: 0,
+      flash: 0,
+      image: 0,
+      proTokens: {input: 0, output: 0},
+      flashTokens: {input: 0, output: 0},
+    });
+    
+    // Note: Assets are NOT cleared from state, preserving the library.
+    
+    // Manually update local storage to reflect the cleared state but kept assets
+    try {
+      // Strip images from asset persistence in LS as well
+      const assetsLite = assets.map(a => ({ ...a, image: null }));
       
-      // Manually update local storage to reflect the cleared state but kept assets
-      // This prevents the previous massive state from reloading, but keeps the assets key.
-       try {
-        // Strip images from asset persistence in LS as well
-        const assetsLite = assets.map(a => ({ ...a, image: null }));
-        
-        const stateToSave = {
-          appState: AppState.IDLE,
-          shotBook: null,
-          errorMessage: null,
-          projectName: null,
-          scenePlans: null,
-          assets: assetsLite, // Preserved but stripped of images
-          lastPrompt: null,
-          logEntries: [],
-          apiCallSummary: {
-             pro: 0, flash: 0, image: 0,
-             proTokens: {input: 0, output: 0},
-             flashTokens: {input: 0, output: 0},
-          },
-        };
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stateToSave));
-      } catch (error) {
-        console.warn('Storage full or broken, clearing storage completely to ensure new project loads correctly.');
-        // If saving the "clean" state fails (likely due to quota from existing massive state),
-        // we must remove the key entirely so the next load doesn't bring back the old massive state.
-        localStorage.removeItem(LOCAL_STORAGE_KEY);
-      }
+      const stateToSave = {
+        appState: AppState.IDLE,
+        shotBook: null,
+        errorMessage: null,
+        projectName: null,
+        scenePlans: null,
+        assets: assetsLite, // Preserved but stripped of images
+        lastPrompt: null,
+        logEntries: [],
+        apiCallSummary: {
+            pro: 0, flash: 0, image: 0,
+            proTokens: {input: 0, output: 0},
+            flashTokens: {input: 0, output: 0},
+        },
+      };
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stateToSave));
+    } catch (error) {
+      console.warn('Storage full or broken, clearing storage completely to ensure new project loads correctly.');
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
     }
+    
+    setShowNewProjectDialog(false);
   };
 
   const handleLoadProject = (jsonString: string) => {
       try {
+          stopGenerationRef.current = true; // Stop any running process
+          
           const parsed = JSON.parse(jsonString);
           if (!parsed.shotBook || !Array.isArray(parsed.shotBook)) {
               throw new Error("Invalid project file format.");
@@ -968,12 +1042,25 @@ const App: React.FC = () => {
           }}
         />
       )}
+      
+      <ConfirmDialog 
+        isOpen={showNewProjectDialog}
+        title="Start New Project?"
+        message={`Are you sure you want to start a new project?\n\nThis will clear your current script and shot list.\nHowever, your Asset Library will be preserved so you can reuse characters and locations.`}
+        onConfirm={confirmNewProject}
+        onCancel={() => setShowNewProjectDialog(false)}
+      />
+
+      <StorageInfoDialog 
+        isOpen={showStorageInfoDialog}
+        onClose={() => setShowStorageInfoDialog(false)}
+      />
 
       {appState === AppState.IDLE && (
         <div className="flex items-center justify-center min-h-screen p-4">
           <ProjectSetupForm
             onGenerate={handleGenerate}
-            isGenerating={false}
+            isGenerating={isProcessing} // Updated check: removed redundant state check that caused type errors
             onLoadProject={handleLoadProject}
             
             // Pass Asset Props
@@ -1002,7 +1089,7 @@ const App: React.FC = () => {
             scenePlans={scenePlans}
             apiCallSummary={apiCallSummary}
             appVersion={PROJECT_VERSION}
-            onNewProject={handleNewProject}
+            onNewProject={handleRequestNewProject}
             onUpdateShot={handleUpdateShot}
             onGenerateSpecificKeyframe={handleGenerateSpecificKeyframe}
             
@@ -1020,6 +1107,11 @@ const App: React.FC = () => {
             onDownloadKeyframesZip={handleDownloadKeyframesZip}
             // New Export for Organizer
             onExportPackage={handleExportPackage}
+            onShowStorageInfo={() => setShowStorageInfoDialog(true)}
+            
+            // New props for Stop Generation
+            isProcessing={isProcessing}
+            onStopGeneration={handleStopGeneration}
           />
         )}
     </div>
