@@ -20,6 +20,14 @@ export enum ShotStatus {
   GENERATION_FAILED = 'GENERATION_FAILED', // Keyframe or JSON generation failed
 }
 
+export enum VeoStatus {
+  IDLE = 'IDLE',
+  QUEUED = 'QUEUED', // Task submitted
+  GENERATING = 'GENERATING', // 0 in API
+  COMPLETED = 'COMPLETED', // 1 in API
+  FAILED = 'FAILED', // 2 or 3 in API
+}
+
 export enum LogType {
   INFO = 'INFO',
   SUCCESS = 'SUCCESS',
@@ -135,13 +143,16 @@ export interface Shot {
   errorMessage?: string; // If image generation fails
   
   // New: The IDs of the assets specifically used for this shot.
-  // This replaces the old ingredientImages array which was just a copy of the global pool.
   selectedAssetIds: string[]; 
   
-  // Deprecated but kept for compatibility during migration if needed, 
-  // or used for one-off uploads not in the library? 
-  // Ideally we move away from this.
-  ingredientImages?: IngredientImage[]; 
+  // Deprecated but kept for compatibility
+  ingredientImages?: IngredientImage[];
+
+  // VEO VIDEO GENERATION FIELDS
+  veoTaskId?: string;
+  veoStatus?: VeoStatus;
+  veoVideoUrl?: string;
+  veoError?: string;
 }
 
 export type ShotBook = Shot[];

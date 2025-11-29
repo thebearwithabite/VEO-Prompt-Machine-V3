@@ -13,6 +13,7 @@ import {
   ShotBook,
   ShotStatus,
   VeoShotWrapper,
+  VeoStatus, // New import
 } from '../types';
 import ActivityLog from './ActivityLog';
 import {
@@ -32,29 +33,51 @@ import {
   SparklesIcon,
   XMarkIcon,
   RectangleStackIcon,
-  InfoIcon, // New import
-  StopCircleIcon, // New import
+  InfoIcon,
+  StopCircleIcon,
+  ClapperboardIcon,
+  MessageSquarePlusIcon,
+  TerminalIcon,
+  VideoIcon,
+  SettingsIcon,
+  FastForwardIcon, // New Icon
 } from './icons';
 
 interface ShotCardProps {
   shot: Shot;
   onUpdateShot: (shot: Shot) => void;
-  onGenerateSpecificKeyframe: (shotId: string) => void; // Renamed from onRetryKeyframe
+  onGenerateSpecificKeyframe: (shotId: string) => void; 
+  onRefineShot: (shotId: string, feedback: string) => void; 
   allAssets: ProjectAsset[];
   onToggleAssetForShot: (shotId: string, assetId: string) => void;
+  onGenerateVideo: (shotId: string) => void;
+  onExtendVeoVideo: (originalShotId: string, prompt: string) => void; // New prop
 }
 
 const ShotCard: React.FC<ShotCardProps> = ({
   shot,
   onUpdateShot,
-  onGenerateSpecificKeyframe, // Renamed prop
+  onGenerateSpecificKeyframe,
+  onRefineShot,
   allAssets,
   onToggleAssetForShot,
+  onGenerateVideo,
+  onExtendVeoVideo, // Destructure
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editedJson, setEditedJson] = useState('');
   const [copyButtonText, setCopyButtonText] = useState('Copy JSON');
   const [isEditingAssets, setIsEditingAssets] = useState(false);
+  
+  // Director Mode State
+  const [isDirectorMode, setIsDirectorMode] = useState(false);
+  const [directorFeedback, setDirectorFeedback] = useState('');
+  const [isRefining, setIsRefining] = useState(false);
+  const [comfyCopyText, setComfyCopyText] = useState('');
+
+  // Extend Mode State
+  const [isExtendMode, setIsExtendMode] = useState(false);
+  const [extendPrompt, setExtendPrompt] = useState('');
 
 
   useEffect(() => {
@@ -110,6 +133,41 @@ const ShotCard: React.FC<ShotCardProps> = ({
     navigator.clipboard.writeText(JSON.stringify(shot.veoJson, null, 2));
     setCopyButtonText('Copied!');
     setTimeout(() => setCopyButtonText('Copy JSON'), 2000);
+  };
+  
+  const handleCopyComfyPayload = () => {
+      if (!shot.veoJson || !shot.keyframePromptText) return;
+      
+      const payload = {
+          positive_prompt: shot.keyframePromptText,
+          negative_prompt: shot.veoJson.veo_shot.flags.do_not.join(', ') || "blurry, low quality, artifacts, text, watermark",
+          aspect_ratio: shot.veoJson.veo_shot.scene.aspect_ratio || "16:9",
+          seed: Math.floor(Math.random() * 1000000000), // Random seed for local gen
+          // Optional extra metadata
+          shot_id: shot.id,
+          character_name: shot.veoJson.veo_shot.character.name
+      };
+      
+      navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setComfyCopyText('Copied Payload!');
+      setTimeout(() => setComfyCopyText(''), 2000);
+  };
+
+  const submitDirectorFeedback = () => {
+      if (!directorFeedback.trim()) return;
+      setIsRefining(true);
+      onRefineShot(shot.id, directorFeedback);
+      // The parent will handle the update, we just close the UI
+      setIsDirectorMode(false);
+      setDirectorFeedback('');
+      setIsRefining(false);
+  };
+
+  const submitExtension = () => {
+      if (!extendPrompt.trim()) return;
+      onExtendVeoVideo(shot.id, extendPrompt);
+      setIsExtendMode(false);
+      setExtendPrompt('');
   };
 
   const getStatusChip = () => {
@@ -178,8 +236,14 @@ const ShotCard: React.FC<ShotCardProps> = ({
       <div className="flex flex-col md:flex-row items-start gap-4 md:gap-6">
         {/* Left Column: Image, Pitch & Assets */}
         <div className="w-full md:w-1/3 flex-shrink-0">
-          <div className="aspect-video bg-black rounded-lg overflow-hidden border border-gray-600 mb-3 flex items-center justify-center">
-            {shot.keyframeImage ? (
+          <div className="aspect-video bg-black rounded-lg overflow-hidden border border-gray-600 mb-3 flex items-center justify-center relative group">
+            {shot.veoStatus === VeoStatus.COMPLETED && shot.veoVideoUrl ? (
+                <video 
+                    src={shot.veoVideoUrl}
+                    controls
+                    className="w-full h-full object-cover"
+                />
+            ) : shot.keyframeImage ? (
               <img
                 src={`data:image/png;base64,${shot.keyframeImage}`}
                 alt={`Keyframe for ${shot.id}`}
@@ -188,6 +252,26 @@ const ShotCard: React.FC<ShotCardProps> = ({
             ) : (
               renderImagePlaceholder()
             )}
+            
+            {/* Status Overlay for Video Gen */}
+            {(shot.veoStatus === VeoStatus.GENERATING || shot.veoStatus === VeoStatus.QUEUED) && (
+                <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center">
+                    <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                    <p className="text-white text-xs font-semibold">Generating Video...</p>
+                </div>
+            )}
+            
+             {/* Copy ComfyUI Payload Overlay Button */}
+             {shot.keyframePromptText && (
+                <button 
+                    onClick={handleCopyComfyPayload}
+                    className="absolute bottom-2 right-2 bg-black/70 hover:bg-black/90 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1 text-xs border border-gray-500"
+                    title="Copy ComfyUI JSON Payload"
+                >
+                    <TerminalIcon className="w-3 h-3" />
+                    {comfyCopyText || 'Copy Payload'}
+                </button>
+             )}
           </div>
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-lg font-semibold text-indigo-400">
@@ -283,13 +367,62 @@ const ShotCard: React.FC<ShotCardProps> = ({
           <div className="flex justify-between items-center mb-2">
             <h4 className="text-md font-semibold text-secondary-dark">VEO 3.1 JSON Prompt</h4>
           </div>
-          {isEditing ? (
+          
+          {/* DIRECTOR MODE INPUT */}
+          {isDirectorMode && (
+              <div className="bg-indigo-900/30 border border-indigo-500 rounded-lg p-4 mb-4 animate-in fade-in zoom-in-95 duration-200">
+                  <div className="flex items-center gap-2 mb-2">
+                      <ClapperboardIcon className="w-5 h-5 text-indigo-400" />
+                      <h5 className="font-bold text-indigo-100">Director's Mode</h5>
+                  </div>
+                  <p className="text-xs text-indigo-300 mb-3">Describe what you want to change. Gemini will update the JSON.</p>
+                  <textarea
+                    autoFocus
+                    value={directorFeedback}
+                    onChange={(e) => setDirectorFeedback(e.target.value)}
+                    placeholder="e.g., Make the lighting moodier..."
+                    className="w-full h-24 bg-black/50 border border-indigo-700 rounded-md p-3 text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                  <div className="flex justify-end gap-2 mt-3">
+                      <button onClick={() => setIsDirectorMode(false)} className="px-3 py-1.5 text-xs text-gray-300 hover:text-white">Cancel</button>
+                      <button onClick={submitDirectorFeedback} disabled={!directorFeedback.trim() || isRefining} className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded flex items-center gap-2 disabled:bg-gray-700">
+                          <MessageSquarePlusIcon className="w-4 h-4" /> Apply & Regenerate
+                      </button>
+                  </div>
+              </div>
+          )}
+
+          {/* EXTEND MODE INPUT */}
+          {isExtendMode && (
+              <div className="bg-green-900/30 border border-green-500 rounded-lg p-4 mb-4 animate-in fade-in zoom-in-95 duration-200">
+                  <div className="flex items-center gap-2 mb-2">
+                      <FastForwardIcon className="w-5 h-5 text-green-400" />
+                      <h5 className="font-bold text-green-100">Extend Video</h5>
+                  </div>
+                  <p className="text-xs text-green-300 mb-3">Describe what happens NEXT in the video extension.</p>
+                  <textarea
+                    autoFocus
+                    value={extendPrompt}
+                    onChange={(e) => setExtendPrompt(e.target.value)}
+                    placeholder="e.g., The car speeds up and turns the corner..."
+                    className="w-full h-24 bg-black/50 border border-green-700 rounded-md p-3 text-sm text-white focus:outline-none focus:ring-1 focus:ring-green-500"
+                  />
+                  <div className="flex justify-end gap-2 mt-3">
+                      <button onClick={() => setIsExtendMode(false)} className="px-3 py-1.5 text-xs text-gray-300 hover:text-white">Cancel</button>
+                      <button onClick={submitExtension} disabled={!extendPrompt.trim()} className="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-semibold rounded flex items-center gap-2 disabled:bg-gray-700">
+                          <FastForwardIcon className="w-4 h-4" /> Generate Extension
+                      </button>
+                  </div>
+              </div>
+          )}
+
+          {!isDirectorMode && !isExtendMode && isEditing ? (
             <textarea
               value={editedJson}
               onChange={(e) => setEditedJson(e.target.value)}
               className="w-full h-80 font-mono text-xs bg-black border border-indigo-500 rounded-md p-2 focus:outline-none resize-y"
             />
-          ) : (
+          ) : !isDirectorMode && !isExtendMode && (
             <>
               {shot.veoJson?.directorNotes && (
                 <div className="bg-gray-700/50 p-3 rounded-md mb-3">
@@ -317,21 +450,57 @@ const ShotCard: React.FC<ShotCardProps> = ({
               </button>
             ) : (
               <>
-                {(shot.status === ShotStatus.NEEDS_REVIEW || shot.status === ShotStatus.GENERATION_FAILED || shot.status === ShotStatus.NEEDS_KEYFRAME_GENERATION) && (
-                   <button
-                    onClick={() => onGenerateSpecificKeyframe(shot.id)}
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition-colors text-sm">
-                    <ArrowPathIcon className="w-4 h-4" />
-                    Regenerate Keyframe
-                  </button>
+                {!isDirectorMode && !isExtendMode && (
+                   <>
+                       <button
+                            onClick={() => setIsDirectorMode(true)}
+                            disabled={!shot.veoJson}
+                            className="flex items-center gap-2 px-4 py-2 bg-indigo-700 hover:bg-indigo-600 text-white font-semibold rounded-lg transition-colors text-sm border border-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <ClapperboardIcon className="w-4 h-4" />
+                            Director Mode
+                        </button>
+                        
+                        {/* Show Generate Video only if not completed or failed */}
+                        {shot.veoStatus !== VeoStatus.COMPLETED && (
+                            <button
+                                onClick={() => onGenerateVideo(shot.id)}
+                                disabled={!shot.veoJson || shot.veoStatus === VeoStatus.GENERATING}
+                                className="flex items-center gap-2 px-4 py-2 bg-green-700 hover:bg-green-600 text-white font-semibold rounded-lg transition-colors text-sm border border-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                <VideoIcon className="w-4 h-4" />
+                                {shot.veoStatus === VeoStatus.GENERATING ? 'Generating...' : 'Generate Video'}
+                            </button>
+                        )}
+                        
+                        {/* Show Extend Video ONLY if completed */}
+                        {shot.veoStatus === VeoStatus.COMPLETED && (
+                            <button
+                                onClick={() => setIsExtendMode(true)}
+                                className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-semibold rounded-lg transition-colors text-sm border border-green-400"
+                            >
+                                <FastForwardIcon className="w-4 h-4" />
+                                Extend
+                            </button>
+                        )}
+
+                        {(shot.status === ShotStatus.NEEDS_REVIEW || shot.status === ShotStatus.GENERATION_FAILED || shot.status === ShotStatus.NEEDS_KEYFRAME_GENERATION) && (
+                        <button
+                            onClick={() => onGenerateSpecificKeyframe(shot.id)}
+                            className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-lg transition-colors text-sm">
+                            <ArrowPathIcon className="w-4 h-4" />
+                            Regenerate Keyframe
+                        </button>
+                        )}
+                        <button
+                        onClick={() => setIsEditing(true)}
+                        disabled={!shot.veoJson}
+                        className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-lg transition-colors text-sm disabled:bg-gray-700 disabled:cursor-not-allowed">
+                        <FilePenLineIcon className="w-4 h-4" />
+                        Edit JSON
+                        </button>
+                   </>
                 )}
-                <button
-                  onClick={() => setIsEditing(true)}
-                  disabled={!shot.veoJson}
-                  className="flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white font-semibold rounded-lg transition-colors text-sm disabled:bg-gray-700 disabled:cursor-not-allowed">
-                  <FilePenLineIcon className="w-4 h-4" />
-                  Edit JSON
-                </button>
               </>
             )}
             <button
@@ -354,33 +523,31 @@ interface ShotBookDisplayProps {
   projectName: string | null;
   scenePlans: ScenePlan[] | null;
   apiCallSummary: ApiCallSummary;
-  appVersion: string; // New prop for app version
+  appVersion: string;
   onNewProject: () => void;
   onUpdateShot: (shot: Shot) => void;
-  onGenerateSpecificKeyframe: (shotId: string) => void; // Renamed prop
+  onGenerateSpecificKeyframe: (shotId: string) => void; 
+  onRefineShot: (shotId: string, feedback: string) => void;
   
-  // Props for assets
   allAssets: ProjectAsset[];
   onToggleAssetForShot: (shotId: string, assetId: string) => void;
-  
-  // Legacy / unused but kept for type safety if needed elsewhere
   allIngredientImages: IngredientImage[];
-  onUpdateShotIngredients: (
-    shotId: string,
-    newImages: IngredientImage[],
-  ) => void;
+  onUpdateShotIngredients: (shotId: string, newImages: IngredientImage[]) => void;
 
   onExportAllJsons: () => void;
   onExportHtmlReport: () => void; 
   onSaveProject: () => void;
   onDownloadKeyframesZip: () => void;
-  // New prop for organizer export
   onExportPackage: () => void;
-  onShowStorageInfo: () => void; // New Prop
+  onShowStorageInfo: () => void;
   
-  // New props for stop processing
   isProcessing: boolean;
   onStopGeneration: () => void;
+
+  veoApiKey: string;
+  onSetVeoApiKey: (key: string) => void;
+  onGenerateVideo: (shotId: string) => void;
+  onExtendVeoVideo: (originalShotId: string, prompt: string) => void; // New
 }
 
 const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
@@ -389,25 +556,32 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
   projectName,
   scenePlans,
   apiCallSummary,
-  appVersion, // Destructure new prop
+  appVersion,
   onNewProject,
   onUpdateShot,
-  onGenerateSpecificKeyframe, // Renamed prop
+  onGenerateSpecificKeyframe, 
+  onRefineShot,
   allAssets,
   onToggleAssetForShot,
-  allIngredientImages, // Destructured but mostly unused in favor of allAssets
+  allIngredientImages,
   onUpdateShotIngredients,
   onExportAllJsons,
   onExportHtmlReport,
   onSaveProject,
   onDownloadKeyframesZip,
-  onExportPackage, // Destructure new export prop
-  onShowStorageInfo, // Destructure new prop
+  onExportPackage,
+  onShowStorageInfo,
   isProcessing,
   onStopGeneration,
+  veoApiKey,
+  onSetVeoApiKey,
+  onGenerateVideo,
+  onExtendVeoVideo, // Destructure
 }) => {
   const hasJsonForExport = shotBook.some((shot) => !!shot.veoJson);
   const hasKeyframesForExport = shotBook.some((shot) => !!shot.keyframeImage);
+
+  const [showVeoKeySettings, setShowVeoKeySettings] = useState(false);
 
   const sceneTitles = new Map(
     Array.isArray(scenePlans)
@@ -446,7 +620,40 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
             {projectName || 'Untitled Project'}
           </h2>
         </div>
-        <div className="flex flex-wrap gap-3 justify-center">
+        <div className="flex flex-wrap gap-3 justify-center items-center">
+          
+           {/* Veo API Key Settings */}
+          <div className="relative">
+              <button 
+                  onClick={() => setShowVeoKeySettings(!showVeoKeySettings)}
+                  className={`p-2 rounded-lg transition-colors border ${veoApiKey ? 'bg-gray-800 border-gray-600 text-gray-400 hover:text-white' : 'bg-red-900/30 border-red-500 text-red-300 animate-pulse'}`}
+                  title="Veo API Settings"
+              >
+                  <SettingsIcon className="w-5 h-5" />
+              </button>
+              {showVeoKeySettings && (
+                  <div className="absolute top-full right-0 mt-2 w-72 bg-gray-800 border border-gray-700 rounded-xl shadow-2xl p-4 z-50">
+                      <div className="flex justify-between items-center mb-3">
+                          <h4 className="font-bold text-white text-sm">Veo API Settings</h4>
+                          <button onClick={() => setShowVeoKeySettings(false)} className="text-gray-400 hover:text-white"><XMarkIcon className="w-4 h-4" /></button>
+                      </div>
+                      <label className="block text-xs text-gray-400 mb-1">API Key (kie.ai)</label>
+                      <input 
+                          type="password" 
+                          value={veoApiKey}
+                          onChange={(e) => onSetVeoApiKey(e.target.value)}
+                          placeholder="Enter your Veo/Kie API Key"
+                          className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500 mb-2"
+                      />
+                      <p className="text-[10px] text-gray-500">
+                          Get your key from <a href="https://kie.ai" target="_blank" className="text-indigo-400 hover:underline">kie.ai</a>. Stored locally.
+                      </p>
+                  </div>
+              )}
+          </div>
+
+          <div className="h-6 w-px bg-gray-700 mx-1"></div>
+
           {isProcessing && (
              <button
                 onClick={onStopGeneration}
@@ -478,7 +685,7 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
              Export Package
           </button>
           <button
-            onClick={onExportHtmlReport} // No longer passing appVersion explicitly here
+            onClick={onExportHtmlReport}
             title='Download a standalone HTML report of the shot list.'
             className="flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white font-semibold rounded-lg transition-colors text-sm">
             <FileTextIcon className="w-4 h-4" />
@@ -524,9 +731,12 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
                     key={shot.id}
                     shot={shot}
                     onUpdateShot={onUpdateShot}
-                    onGenerateSpecificKeyframe={onGenerateSpecificKeyframe} // Renamed prop
+                    onGenerateSpecificKeyframe={onGenerateSpecificKeyframe} 
+                    onRefineShot={onRefineShot} 
                     allAssets={allAssets}
                     onToggleAssetForShot={onToggleAssetForShot}
+                    onGenerateVideo={onGenerateVideo}
+                    onExtendVeoVideo={onExtendVeoVideo} // Pass
                   />
                 ))}
               </div>

@@ -42,6 +42,10 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
   hasScript,
 }) => {
   const [allCopied, setAllCopied] = useState(false);
+  
+  // State for manual entry
+  const [addingAssetType, setAddingAssetType] = useState<AssetType | null>(null);
+  const [newAssetName, setNewAssetName] = useState('');
 
   const handleImageUpload = async (
     id: string,
@@ -52,16 +56,39 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
     onUpdateAssetImage(id, file);
   };
 
-  const addManualAsset = (type: AssetType) => {
-    const name = prompt(`Enter name for new ${type}:`);
-    if (name) {
+  const startAdding = (type: AssetType) => {
+    setAddingAssetType(type);
+    setNewAssetName('');
+  };
+
+  const cancelAdding = () => {
+    setAddingAssetType(null);
+    setNewAssetName('');
+  };
+
+  const confirmAdding = () => {
+    if (newAssetName.trim() && addingAssetType) {
       onAddAsset({
         id: `manual-${Date.now()}`,
-        name,
+        name: newAssetName.trim(),
         description: 'Manually added asset',
-        type,
+        type: addingAssetType,
         image: null,
       });
+      cancelAdding();
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation(); // Stop form submission
+      confirmAdding();
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelAdding();
     }
   };
 
@@ -98,6 +125,7 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
         </div>
         <div className="flex gap-2">
            <button
+            type="button"
             onClick={handleCopyAllAssets}
             disabled={assets.length === 0}
             className="px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap">
@@ -105,6 +133,7 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
              Copy All Descriptions
           </button>
           <button
+            type="button"
             onClick={onAnalyzeScript}
             disabled={isAnalyzing || !hasScript}
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap">
@@ -125,6 +154,8 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
 
       {sections.map((section) => {
         const sectionAssets = assets.filter((a) => a.type === section.type);
+        const isAddingThisType = addingAssetType === section.type;
+
         return (
           <div key={section.type} className="mb-8 last:mb-0">
             <div className="flex justify-between items-center mb-3">
@@ -132,13 +163,43 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
                 {section.label}
               </h4>
               <button
-                onClick={() => addManualAsset(section.type)}
+                onClick={() => startAdding(section.type)}
                 type="button"
                 className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1">
                 <PlusIcon className="w-3 h-3" /> Add {section.label.slice(0, -1)}
               </button>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {/* Inline Input Card for New Asset */}
+              {isAddingThisType && (
+                 <div className="bg-gray-800 rounded-lg border border-indigo-500/50 p-3 flex flex-col justify-center gap-2 animate-in fade-in zoom-in-95 duration-200">
+                    <p className="text-xs text-gray-400">New {section.label.slice(0, -1)} Name:</p>
+                    <input
+                      autoFocus
+                      type="text"
+                      className="bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500 w-full"
+                      placeholder="e.g., Detective John"
+                      value={newAssetName}
+                      onChange={(e) => setNewAssetName(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                    />
+                    <div className="flex gap-2 justify-end mt-1">
+                      <button 
+                        onClick={cancelAdding} 
+                        type="button" 
+                        className="text-xs px-2 py-1 text-gray-400 hover:text-white rounded hover:bg-gray-700">
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={confirmAdding} 
+                        type="button" 
+                        className="text-xs px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded font-medium">
+                        Add
+                      </button>
+                    </div>
+                 </div>
+              )}
+
               {sectionAssets.map((asset) => (
                 <AssetCard
                   key={asset.id}
@@ -147,7 +208,8 @@ const AssetLibrary: React.FC<AssetLibraryProps> = ({
                   onUpload={(e) => handleImageUpload(asset.id, e)}
                 />
               ))}
-              {sectionAssets.length === 0 && (
+              
+              {sectionAssets.length === 0 && !isAddingThisType && (
                 <div className="col-span-full py-8 text-center border-2 border-dashed border-gray-700 rounded-lg text-gray-500 text-sm">
                   No {section.label.toLowerCase()} detected yet. Run analysis or add manually.
                 </div>
@@ -229,6 +291,7 @@ const AssetCard: React.FC<{
             {asset.description}
             </p>
              <button
+                type="button"
                 onClick={handleCopyDescription}
                 className="text-gray-500 hover:text-white transition-colors flex-shrink-0"
                 title="Copy Name & Description">

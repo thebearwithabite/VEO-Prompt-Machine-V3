@@ -9,18 +9,24 @@ import LoadingIndicator from './components/LoadingIndicator';
 import ProjectSetupForm from './components/PromptForm';
 import ConfirmDialog from './components/ConfirmDialog';
 import StorageInfoDialog from './components/StorageInfoDialog';
-// Add missing import for ShotBookDisplay component
 import ShotBookDisplay from './components/VideoResult';
+import { StopCircleIcon } from './components/icons';
 import {
-  generateKeyframeImage, // Renamed from generateKeyframe
-  generateKeyframePromptText, // New import
+  generateKeyframeImage,
+  generateKeyframePromptText,
   generateProjectName,
   generateSceneNames,
   generateScenePlan,
   generateShotList,
   generateVeoJson,
   extractAssetsFromScript,
+  refineVeoJson,
 } from './services/geminiService';
+import {
+  generateVeoVideo,
+  getVeoTaskDetails,
+  extendVeoVideo
+} from './services/veoService';
 import {generateMasterShotlistHtml} from './services/reportGenerator';
 import {
   ApiCallSummary,
@@ -30,18 +36,19 @@ import {
   LogType,
   ScenePlan,
   Shot,
-  // Add missing import for ShotBook type
   ShotBook,
   ShotStatus,
   VeoShot,
   ProjectAsset,
+  VeoStatus,
 } from './types';
-import { metadata } from '@/metadata'; // Import metadata to get version - CORRECTED PATH
+import { metadata } from '@/metadata';
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const API_CALL_DELAY_MS = 1200; // To stay under 60 QPM limit
 const LOCAL_STORAGE_KEY = 'veoPromptMachineState';
-const PROJECT_VERSION = metadata.version || '0.0.0'; // Read version from metadata
+const VEO_API_KEY_STORAGE = 'veoApiKey';
+const PROJECT_VERSION = metadata.version || '0.0.0';
 
 // Helper to convert file to base64
 const fileToBase64 = (file: File): Promise<string> =>
@@ -59,6 +66,7 @@ const App: React.FC = () => {
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const [projectName, setProjectName] = useState<string | null>(null);
   const [scenePlans, setScenePlans] = useState<ScenePlan[] | null>(null);
+  const [veoApiKey, setVeoApiKey] = useState<string>('');
   
   // Dialog States
   const [showNewProjectDialog, setShowNewProjectDialog] = useState(false);
@@ -85,1035 +93,932 @@ const App: React.FC = () => {
     flashTokens: {input: 0, output: 0},
   });
 
-  const addLogEntry = useCallback((message: string, type: LogType) => {
-    const timestamp = new Date().toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-    setLogEntries((prev) => [...prev, {timestamp, message, type}]);
-  }, []);
-
-  // Load state from localStorage on initial mount
+  // Load from Local Storage on Mount
   useEffect(() => {
-    try {
-      const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
-      if (savedState) {
+    const savedApiKey = localStorage.getItem(VEO_API_KEY_STORAGE);
+    if (savedApiKey) setVeoApiKey(savedApiKey);
+
+    const savedState = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (savedState) {
+      try {
         const parsedState = JSON.parse(savedState);
-        setAppState(parsedState.appState || AppState.IDLE);
-        setShotBook(parsedState.shotBook || null);
-        setErrorMessage(parsedState.errorMessage || null);
-        setProjectName(parsedState.projectName || null);
+        setShotBook(parsedState.shotBook);
+        setProjectName(parsedState.projectName);
+        setLogEntries(parsedState.logEntries || []);
+        setApiCallSummary(parsedState.apiCallSummary || {
+            pro: 0, flash: 0, image: 0, proTokens: {input: 0, output: 0}, flashTokens: {input: 0, output: 0}
+        });
         setScenePlans(parsedState.scenePlans || null);
         setAssets(parsedState.assets || []);
-        setLastPrompt(parsedState.lastPrompt || null);
-        setLogEntries(parsedState.logEntries || []);
-        setApiCallSummary(
-          parsedState.apiCallSummary || {
-            pro: 0,
-            flash: 0,
-            image: 0,
-            proTokens: {input: 0, output: 0},
-            flashTokens: {input: 0, output: 0},
-          },
-        );
-        addLogEntry('Restored previous session from browser storage.', LogType.INFO);
-      }
-    } catch (error) {
-      console.error('Failed to load state from localStorage:', error);
-      localStorage.removeItem(LOCAL_STORAGE_KEY);
-    }
-  }, [addLogEntry]);
-
-  // Save state to localStorage whenever it changes
-  useEffect(() => {
-    // Save if we have a valid result OR if we have assets in the library.
-    // This ensures users don't lose their asset library setup if they refresh before generating.
-    const hasUnsavedWork = (appState === AppState.SUCCESS && shotBook) || assets.length > 0;
-
-    if (hasUnsavedWork) {
-      try {
-        // OPTIMIZATION: Browser LocalStorage has a limit (usually 5MB).
-        // Saving base64 images here will crash the app with QuotaExceededError.
-        // We must strip the heavy image data from the auto-save state.
-        // Users must use "Save Project" to keep images.
         
-        const assetsLite = assets.map(a => ({
-            ...a,
-            image: null // Strip asset image for auto-save
-        }));
+        if (parsedState.shotBook && parsedState.shotBook.length > 0) {
+          setAppState(AppState.SUCCESS);
+        }
+      } catch (e) {
+        console.error('Failed to load state:', e);
+      }
+    }
+  }, []);
 
-        const shotBookLite = shotBook?.map(s => ({
-            ...s,
-            keyframeImage: undefined // Strip keyframe image for auto-save
+  // Save to Local Storage
+  useEffect(() => {
+    if (veoApiKey) {
+        localStorage.setItem(VEO_API_KEY_STORAGE, veoApiKey);
+    }
+
+    if (appState === AppState.SUCCESS || assets.length > 0) {
+      try {
+        // Create a lightweight version of the shotbook without heavy images for auto-save
+        const lightweightShotBook = shotBook?.map(shot => ({
+            ...shot,
+            keyframeImage: undefined // Don't autosave heavy images to prevent quota exceeded
+        }));
+        
+        // Also strip images from assets for auto-save
+        const lightweightAssets = assets.map(asset => ({
+            ...asset,
+            image: undefined
         }));
 
         const stateToSave = {
-          appState,
-          shotBook: shotBookLite,
-          errorMessage,
+          shotBook: lightweightShotBook,
           projectName,
-          scenePlans,
-          assets: assetsLite,
-          lastPrompt,
           logEntries,
           apiCallSummary,
+          scenePlans,
+          assets: lightweightAssets
         };
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stateToSave));
-      } catch (error) {
-        // Just in case it still fails, log it but don't crash
-        console.warn('Failed to save state to localStorage (Quota Exceeded). Session data not persisted.', error);
+      } catch (e) {
+        console.error('Failed to save state to localStorage:', e);
+        // If quota exceeded, we might want to clear old data or notify user
+        if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+             // Optional: Try to clear and save only essential data
+             localStorage.removeItem(LOCAL_STORAGE_KEY);
+        }
       }
     }
-  }, [
-    appState,
-    shotBook,
-    errorMessage,
-    projectName,
-    scenePlans,
-    assets,
-    lastPrompt,
-    logEntries,
-    apiCallSummary,
-  ]);
+  }, [shotBook, appState, projectName, logEntries, apiCallSummary, scenePlans, assets, veoApiKey]);
 
-
+  // POLL FOR VEO TASK STATUS
   useEffect(() => {
-    const checkApiKey = async () => {
-      if (window.aistudio) {
-        try {
-          if (!(await window.aistudio.hasSelectedApiKey())) {
-            setShowApiKeyDialog(true);
-          }
-        } catch (error) {
-          console.warn('aistudio.hasSelectedApiKey check failed.', error);
-          setShowApiKeyDialog(true);
-        }
-      }
-    };
-    checkApiKey();
-  }, []);
+    if (!veoApiKey || !shotBook) return;
 
-  // --- Asset Management Handlers ---
+    // Check if any shots are currently generating
+    const activeShots = shotBook.filter(s => s.veoStatus === VeoStatus.GENERATING || s.veoStatus === VeoStatus.QUEUED);
+    if (activeShots.length === 0) return;
+
+    const pollInterval = setInterval(async () => {
+        let updated = false;
+        const newShotBook = await Promise.all(shotBook.map(async (shot) => {
+             // Only check shots that are actively generating and have a Task ID
+             if ((shot.veoStatus === VeoStatus.GENERATING || shot.veoStatus === VeoStatus.QUEUED) && shot.veoTaskId) {
+                 try {
+                     const info = await getVeoTaskDetails(veoApiKey, shot.veoTaskId);
+                     // successFlag: 0=Generating, 1=Success, 2=Failed, 3=Generation Failed
+                     let newStatus: VeoStatus = shot.veoStatus;
+                     let newUrl = shot.veoVideoUrl;
+                     let error = shot.veoError;
+
+                     if (info.data.successFlag === 1) {
+                         newStatus = VeoStatus.COMPLETED;
+                         newUrl = info.data.response?.resultUrls?.[0];
+                         addLogEntry(`Video ready for ${shot.id}`, LogType.SUCCESS);
+                     } else if (info.data.successFlag === 2 || info.data.successFlag === 3) {
+                         newStatus = VeoStatus.FAILED;
+                         error = info.data.errorMessage || "Veo Generation failed";
+                         addLogEntry(`Video failed for ${shot.id}: ${error}`, LogType.ERROR);
+                     }
+
+                     if (newStatus !== shot.veoStatus) {
+                         updated = true;
+                         return { ...shot, veoStatus: newStatus, veoVideoUrl: newUrl, veoError: error };
+                     }
+                 } catch (e) {
+                     console.warn(`Polling error for ${shot.id}`, e);
+                 }
+             }
+             return shot;
+        }));
+
+        if (updated) {
+            setShotBook(newShotBook as ShotBook);
+        }
+
+    }, 5000); // Poll every 5 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [shotBook, veoApiKey]);
+
+
+  const addLogEntry = (message: string, type: LogType = LogType.INFO) => {
+    setLogEntries((prev) => [
+      ...prev,
+      {timestamp: new Date().toLocaleTimeString(), message, type},
+    ]);
+  };
+
+  const updateApiSummary = (tokens: {input: number; output: number}, model: 'pro' | 'flash' | 'image') => {
+    setApiCallSummary((prev) => ({
+      ...prev,
+      [model]: prev[model] + 1,
+      proTokens: model === 'pro' ? { input: prev.proTokens.input + tokens.input, output: prev.proTokens.output + tokens.output } : prev.proTokens,
+      flashTokens: model === 'flash' ? { input: prev.flashTokens.input + tokens.input, output: prev.flashTokens.output + tokens.output } : prev.flashTokens,
+    }));
+  };
+
+  // ASSET MANAGEMENT
   const handleAnalyzeScriptForAssets = async (script: string) => {
-    if (!script.trim()) return;
-    setIsAnalyzingAssets(true);
-    setErrorMessage(null);
-    try {
-      const {result: newAssets, tokens} = await extractAssetsFromScript(script);
-      
-      // Merge with existing assets (deduplicate by name fuzzy match if needed, but for now simple concat or replace)
-      // We will just append for now, user can delete.
-      setAssets(prev => [...prev, ...newAssets]);
-      
-      setApiCallSummary(prev => ({
-        ...prev,
-        pro: prev.pro + 1,
-        proTokens: {
-            input: prev.proTokens.input + tokens.input,
-            output: prev.proTokens.output + tokens.output
-        }
-      }));
-    } catch (error) {
-       const message = error instanceof Error ? error.message : 'Unknown error analysing assets.';
-       setErrorMessage(`Asset Analysis Failed: ${message}`);
-    } finally {
-      setIsAnalyzingAssets(false);
-    }
-  };
-
-  const handleAddAsset = (asset: ProjectAsset) => {
-    setAssets(prev => [...prev, asset]);
-  };
-
-  const handleRemoveAsset = (id: string) => {
-    setAssets(prev => prev.filter(a => a.id !== id));
-  };
-
-  const handleUpdateAssetImage = async (id: string, file: File) => {
+     setIsAnalyzingAssets(true);
+     addLogEntry("Analyzing script for visual assets (Characters, Locations, Props)...", LogType.INFO);
      try {
-       const base64 = await fileToBase64(file);
-       setAssets(prev => prev.map(a => {
-         if (a.id === id) {
-           return { ...a, image: { base64, mimeType: file.type } };
-         }
-         return a;
-       }));
+         const { result, tokens } = await extractAssetsFromScript(script);
+         updateApiSummary(tokens, 'pro');
+         
+         // Merge with existing assets (prevent duplicates based on name)
+         setAssets(prev => {
+             const existingNames = new Set(prev.map(a => a.name.toLowerCase()));
+             const newAssets = result.filter(a => !existingNames.has(a.name.toLowerCase()));
+             return [...prev, ...newAssets];
+         });
+         addLogEntry(`Found ${result.length} potential assets.`, LogType.SUCCESS);
      } catch (e) {
-       console.error("Failed to process image", e);
+         addLogEntry("Failed to extract assets.", LogType.ERROR);
+     } finally {
+         setIsAnalyzingAssets(false);
      }
   };
 
-  const handleStopGeneration = () => {
-      stopGenerationRef.current = true;
+  const handleAddAsset = (asset: ProjectAsset) => {
+      setAssets(prev => [...prev, asset]);
+      addLogEntry(`Added asset: ${asset.name}`, LogType.INFO);
   };
 
-  const handleGenerate = useCallback(
-    async (
-      script: string,
-      createKeyframes: boolean,
-    ) => {
-      if (window.aistudio) {
-        try {
-          if (!(await window.aistudio.hasSelectedApiKey())) {
-            setShowApiKeyDialog(true);
-            return;
-          }
-        } catch (error) {
-          console.warn('aistudio.hasSelectedApiKey check failed.', error);
-          setShowApiKeyDialog(true);
-          return;
-        }
-      }
+  const handleRemoveAsset = (id: string) => {
+      setAssets(prev => prev.filter(a => a.id !== id));
+  };
 
-      setAppState(AppState.LOADING);
-      setErrorMessage(null);
-      setShotBook(null);
-      setLastPrompt({script, createKeyframes});
-      setLogEntries([]); // Clear logs
-      setProjectName(null);
-      setScenePlans(null); // Clear scene plans
-      const summary: ApiCallSummary = {
-        pro: 0,
-        flash: 0,
-        image: 0,
-        proTokens: {input: 0, output: 0},
-        flashTokens: {input: 0, output: 0},
-      };
-      setApiCallSummary(summary);
-      addLogEntry('Starting new shot book generation...', LogType.INFO);
-      addLogEntry(
-        `API rate limit management enabled. Adding a small delay between requests.`,
-        LogType.INFO,
-      );
-
-      // RESET STOP STATE
-      stopGenerationRef.current = false;
-      setIsProcessing(true);
-
+  const handleUpdateAssetImage = async (id: string, file: File) => {
       try {
-        if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
-
-        // Step 0: Generate Project Name
-        addLogEntry('Generating a project name...', LogType.STEP);
-        const {result: generatedName, tokens: nameTokens} = await generateProjectName(script);
-        summary.flash += 1;
-        summary.flashTokens.input += nameTokens.input;
-        summary.flashTokens.output += nameTokens.output;
-        setApiCallSummary({...summary});
-        setProjectName(generatedName);
-        addLogEntry(
-          `Project name set to: "${generatedName}"`,
-          LogType.SUCCESS,
-        );
-        await delay(API_CALL_DELAY_MS);
-        
-        if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
-
-        // Step 1: Generate the shot list for immediate structural feedback.
-        addLogEntry('Analyzing script to create shot list...', LogType.STEP);
-        // UPGRADE: Now uses Gemini 3 Pro
-        const {result: shotList, tokens: shotListTokens} = await generateShotList(script);
-        summary.pro += 1; // Upgraded to Pro
-        summary.proTokens.input += shotListTokens.input;
-        summary.proTokens.output += shotListTokens.output;
-        setApiCallSummary({...summary});
-        addLogEntry(
-          `Successfully created shot list with ${shotList.length} shots.`,
-          LogType.SUCCESS,
-        );
-        await delay(API_CALL_DELAY_MS);
-
-        if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
-
-        // Step 1.5: Generate descriptive scene names
-        addLogEntry('Generating descriptive scene names...', LogType.STEP);
-        const {result: {names: sceneNames, sceneCount}, tokens: sceneNameTokens} = await generateSceneNames(
-          shotList,
-          script,
-        );
-        summary.flash += sceneCount; // One call per scene (Flash)
-        summary.flashTokens.input += sceneNameTokens.input;
-        summary.flashTokens.output += sceneNameTokens.output;
-        setApiCallSummary({...summary});
-        addLogEntry('Scene names generated successfully.', LogType.SUCCESS);
-
-        const getSceneId = (shotId: string) =>
-          shotId.substring(0, shotId.lastIndexOf('_'));
-
-        // Step 1.6: Generate a plan for each scene
-        addLogEntry('Generating scene plans for runtime...', LogType.STEP);
-        const scenes = new Map<string, {id: string; pitch: string}[]>();
-        for (const shot of shotList) {
-          const sceneId = getSceneId(shot.id);
-          if (sceneId) {
-            if (!scenes.has(sceneId)) scenes.set(sceneId, []);
-            scenes.get(sceneId)!.push(shot);
-          }
-        }
-
-        const generatedPlans: ScenePlan[] = [];
-        for (const [sceneId, shotsInScene] of scenes.entries()) {
-          if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
-          addLogEntry(`Planning scene: ${sceneId}...`, LogType.INFO);
-          const scenePitches = shotsInScene
-            .map((s) => `- ${s.pitch}`)
-            .join('\n');
-          // UPGRADE: Now uses Gemini 3 Pro
-          const {result: plan, tokens: planTokens} = await generateScenePlan(sceneId, scenePitches, script);
-          summary.pro += 1; // Upgraded to Pro
-          summary.proTokens.input += planTokens.input;
-          summary.proTokens.output += planTokens.output;
-          setApiCallSummary({...summary});
-          generatedPlans.push(plan);
-          await delay(API_CALL_DELAY_MS);
-        }
-        setScenePlans(generatedPlans);
-        addLogEntry(
-          `Successfully generated ${generatedPlans.length} scene plans.`,
-          LogType.SUCCESS,
-        );
-
-        const initialShotBook: ShotBook = shotList.map((shot) => {
-          const sceneId = getSceneId(shot.id);
-          return {
-            id: shot.id,
-            pitch: shot.pitch,
-            status: ShotStatus.PENDING_JSON,
-            sceneName: sceneNames.get(sceneId) || sceneId,
-            selectedAssetIds: [], // Initialize empty
-          };
-        });
-
-        if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
-
-        setShotBook(initialShotBook);
-        setAppState(AppState.SUCCESS); // Show the shot book UI immediately
-
-        // Step 2 & 3: Sequentially process each shot completely (JSON then Keyframe).
-        for (const initialShot of initialShotBook) {
-          // CHECK FOR STOP SIGNAL
-          if (stopGenerationRef.current) {
-              addLogEntry("Generation stopped by user.", LogType.INFO);
-              break;
-          }
-
-          let currentShot: Shot = {...initialShot};
-          addLogEntry(`Processing Shot: ${currentShot.id}`, LogType.INFO);
-
-          // Find the scene plan for this shot
-          const sceneId = getSceneId(currentShot.id);
-          const scenePlanForShot =
-            generatedPlans.find((p) => p.scene_id === sceneId) || null;
-
-          // Generate VEO JSON for the current shot
-          try {
-            setShotBook((current) =>
-              current!.map((s) =>
-                s.id === currentShot.id
-                  ? {...s, status: ShotStatus.GENERATING_JSON}
-                  : s,
-              ),
-            );
-            addLogEntry('Generating VEO JSON...', LogType.STEP);
-            // UPGRADE: Now uses Gemini 3 Pro
-            const {result: veoJson, tokens: veoJsonTokens} = await generateVeoJson(
-              currentShot.pitch,
-              currentShot.id,
-              script,
-              scenePlanForShot,
-            );
-            summary.pro += 1; // Upgraded to Pro
-            summary.proTokens.input += veoJsonTokens.input;
-            summary.proTokens.output += veoJsonTokens.output;
-            setApiCallSummary({...summary});
-            addLogEntry('VEO JSON generated successfully.', LogType.SUCCESS);
-            
-            // SMART ASSET MAPPING
-            // Check if character name or scene context matches any assets
-            const assignedAssetIds: string[] = [];
-            
-            assets.forEach(asset => {
-                const nameLower = asset.name.toLowerCase();
-                const charName = veoJson.veo_shot.character.name.toLowerCase();
-                const context = veoJson.veo_shot.scene.context.toLowerCase();
-                const behavior = veoJson.veo_shot.character.behavior.toLowerCase();
-                const visualStyle = veoJson.veo_shot.scene.visual_style.toLowerCase();
-                
-                if (asset.type === 'character' && charName.includes(nameLower)) {
-                    assignedAssetIds.push(asset.id);
-                }
-                if (asset.type === 'location' && context.includes(nameLower)) {
-                    assignedAssetIds.push(asset.id);
-                }
-                if (asset.type === 'prop' && (context.includes(nameLower) || behavior.includes(nameLower))) {
-                    assignedAssetIds.push(asset.id);
-                }
-                if (asset.type === 'style' && visualStyle.includes(nameLower)) {
-                    assignedAssetIds.push(asset.id);
-                }
-            });
-            
-            if (assignedAssetIds.length > 0) {
-                 addLogEntry(`Auto-assigned ${assignedAssetIds.length} assets to shot.`, LogType.INFO);
-            }
-
-            currentShot = {
-              ...currentShot,
-              veoJson,
-              selectedAssetIds: assignedAssetIds,
-              status: ShotStatus.PENDING_KEYFRAME_PROMPT, // Next state is to generate prompt text
-            };
-            setShotBook((current) =>
-              current!.map((s) => (s.id === currentShot.id ? currentShot : s)),
-            );
-            await delay(API_CALL_DELAY_MS); // Delay after successful JSON call
-          } catch (jsonError) {
-            console.error(
-              `Failed to generate JSON for ${currentShot.id}:`,
-              jsonError,
-            );
-            const jsonErrorMessage =
-              jsonError instanceof Error
-                ? jsonError.message
-                : 'VEO JSON generation failed.';
-            addLogEntry(
-              `Failed to generate VEO JSON: ${jsonErrorMessage}`,
-              LogType.ERROR,
-            );
-            const failedShot = {
-              ...currentShot,
-              status: ShotStatus.GENERATION_FAILED,
-              errorMessage: jsonErrorMessage,
-            };
-            setShotBook((current) =>
-              current!.map((s) => (s.id === currentShot.id ? failedShot : s)),
-            );
-            continue; // Skip to the next shot in the loop if JSON fails
-          }
-
-          // Check for stop before prompt generation
-          if (stopGenerationRef.current) {
-              addLogEntry("Generation stopped by user.", LogType.INFO);
-              break;
-          }
-
-          // Generate Keyframe Prompt Text
-          try {
-            setShotBook((current) =>
-              current!.map((s) =>
-                s.id === currentShot.id
-                  ? {...s, status: ShotStatus.GENERATING_KEYFRAME_PROMPT}
-                  : s,
-              ),
-            );
-            addLogEntry('Refining keyframe prompt text...', LogType.STEP);
-            // UPGRADE: Now a real model call to Gemini 3 Pro to enhance the prompt
-            const {result: keyframePromptText, tokens: promptTokens} = await generateKeyframePromptText(
-              currentShot.veoJson!.veo_shot as VeoShot,
-            );
-            
-            summary.pro += 1; // Upgraded to Pro call for prompt engineering
-            summary.proTokens.input += promptTokens.input;
-            summary.proTokens.output += promptTokens.output;
-            setApiCallSummary({...summary});
-            
-            currentShot = {
-              ...currentShot,
-              keyframePromptText,
-              status: ShotStatus.NEEDS_KEYFRAME_GENERATION, // Ready for HIL image generation
-            };
-            setShotBook((current) =>
-              current!.map((s) => (s.id === currentShot.id ? currentShot : s)),
-            );
-            addLogEntry(
-              `Keyframe prompt text refined for Shot ${currentShot.id}.`,
-              LogType.SUCCESS,
-            );
-            await delay(API_CALL_DELAY_MS);
-          } catch (promptError) {
-            console.error(
-              `Failed to generate keyframe prompt text for ${currentShot.id}:`,
-              promptError,
-            );
-            const promptErrorMessage =
-              promptError instanceof Error
-                ? promptError.message
-                : 'Keyframe prompt generation failed.';
-            addLogEntry(
-              `Failed to generate keyframe prompt text: ${promptErrorMessage}`,
-              LogType.ERROR,
-            );
-            const failedShot = {
-              ...currentShot,
-              status: ShotStatus.GENERATION_FAILED,
-              errorMessage: promptErrorMessage,
-            };
-            setShotBook((current) =>
-              current!.map((s) => (s.id === currentShot.id ? failedShot : s)),
-            );
-            continue; // Skip to the next shot if prompt text generation fails
-          }
-
-          // If 'createKeyframes' is true, automatically generate the image
-          if (createKeyframes) {
-            
-            // Check for stop before image generation
-            if (stopGenerationRef.current) {
-                addLogEntry("Generation stopped by user.", LogType.INFO);
-                break;
-            }
-
-            // Generate Keyframe Image for the current shot
-            try {
-              setShotBook((current) =>
-                current!.map((s) =>
-                  s.id === currentShot.id
-                    ? {...s, status: ShotStatus.GENERATING_IMAGE}
-                    : s,
-                ),
-              );
-              addLogEntry('Generating keyframe image...', LogType.STEP);
-
-              // RESOLVE ASSET IDs TO IMAGES
-              const ingredientImages: IngredientImage[] = (currentShot.selectedAssetIds || [])
-                .map(id => assets.find(a => a.id === id)?.image)
-                .filter((img): img is IngredientImage => img !== null);
-
-              // Pass aspect ratio from VEO JSON if available
-              const aspectRatio = currentShot.veoJson?.veo_shot.scene.aspect_ratio || '16:9';
-
-              const {result: imageBase64} = await generateKeyframeImage(
-                currentShot.keyframePromptText || '',
-                ingredientImages,
-                aspectRatio // Pass the aspect ratio here
-              );
-              summary.image += 1;
-              setApiCallSummary({...summary});
-
-              currentShot = {
-                ...currentShot,
-                keyframeImage: imageBase64,
-                status: ShotStatus.NEEDS_REVIEW,
-              };
-              setShotBook((current) =>
-                current!.map((s) => (s.id === currentShot.id ? currentShot : s)),
-              );
-              addLogEntry(
-                `Keyframe generated successfully for Shot ${currentShot.id}.`,
-                LogType.SUCCESS,
-              );
-              await delay(API_CALL_DELAY_MS);
-            } catch (imageError) {
-              console.error(
-                `Failed to generate image for ${currentShot.id}:`,
-                imageError,
-              );
-              const imageErrorMessage =
-                imageError instanceof Error
-                  ? imageError.message
-                  : 'Image generation failed.';
-              addLogEntry(
-                `Failed to generate keyframe image: ${imageErrorMessage}`,
-                LogType.ERROR,
-              );
-              const failedShot = {
-                ...currentShot,
-                status: ShotStatus.GENERATION_FAILED,
-                errorMessage: imageErrorMessage,
-              };
-              setShotBook((current) =>
-                current!.map((s) => (s.id === currentShot.id ? failedShot : s)),
-              );
-            }
-          }
-        }
-
-        addLogEntry('Processing complete.', LogType.SUCCESS);
-      } catch (error) {
-        // If user stopped, we don't want to set Error state, just log it.
-        if (stopGenerationRef.current) {
-             console.log("Generation flow aborted by user.");
-             // If we are not yet in SUCCESS state (i.e. during initial setup), 
-             // we might want to go back to IDLE or keep what we have.
-             // But since appState is SUCCESS before the loop, we are fine.
-             // If stopped during initial analysis (before SUCCESS), we go to ERROR or IDLE.
-             if (appState !== AppState.SUCCESS) {
-                  setErrorMessage("Generation cancelled by user.");
-                  setAppState(AppState.IDLE);
-             }
-        } else {
-            console.error('Process failed:', error);
-            setErrorMessage(
-            error instanceof Error ? error.message : 'An unexpected error occurred.',
-            );
-            setAppState(AppState.ERROR);
-            addLogEntry('Process terminated due to error.', LogType.ERROR);
-        }
-      } finally {
-          setIsProcessing(false);
+          const base64 = await fileToBase64(file);
+          const mimeType = file.type;
+          setAssets(prev => prev.map(a => 
+              a.id === id ? { ...a, image: { base64, mimeType } } : a
+          ));
+          addLogEntry("Updated asset image.", LogType.SUCCESS);
+      } catch (e) {
+          addLogEntry("Failed to process image.", LogType.ERROR);
       }
-    },
-    [assets, addLogEntry, appState],
-  );
+  };
 
-  // Handle user manually requesting a specific keyframe regeneration
-  const handleGenerateSpecificKeyframe = async (shotId: string) => {
-    setShotBook((current) => {
-      if (!current) return null;
-      return current.map((s) =>
-        s.id === shotId ? {...s, status: ShotStatus.GENERATING_IMAGE} : s,
-      );
-    });
 
-    const shot = shotBook?.find((s) => s.id === shotId);
-    if (!shot) return;
+  // GENERATION LOGIC
+  const handleGenerate = async (scriptInput: string, createKeyframes: boolean) => {
+    if (!process.env.API_KEY && !showApiKeyDialog) {
+      setShowApiKeyDialog(true);
+      return;
+    }
+    
+    stopGenerationRef.current = false;
+    setIsProcessing(true);
+    setAppState(AppState.LOADING);
+    setErrorMessage(null);
+    setLogEntries([]);
+    setShotBook([]);
+    setApiCallSummary({pro: 0, flash: 0, image: 0, proTokens: {input: 0, output: 0}, flashTokens: {input: 0, output: 0}});
+    setLastPrompt({script: scriptInput, createKeyframes});
 
     try {
-      addLogEntry(`Regenerating keyframe for ${shotId}...`, LogType.STEP);
+      addLogEntry('Starting generation process...', LogType.INFO);
+
+      // 1. Project Name
+      addLogEntry('Generating project name...', LogType.STEP);
+      const nameData = await generateProjectName(scriptInput);
+      setProjectName(nameData.result);
+      updateApiSummary(nameData.tokens, 'flash');
+      addLogEntry(`Project Name: ${nameData.result}`, LogType.SUCCESS);
+
+      if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
+
+      // 2. Generate Shot List
+      addLogEntry('Breaking down script into shot list...', LogType.STEP);
+      const shotListData = await generateShotList(scriptInput);
+      const rawShots = shotListData.result;
+      updateApiSummary(shotListData.tokens, 'pro');
+      addLogEntry(`Generated ${rawShots.length} shots.`, LogType.SUCCESS);
+
+      if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
       
-       // RESOLVE ASSET IDs TO IMAGES (Current Shot state)
-      const ingredientImages: IngredientImage[] = (shot.selectedAssetIds || [])
-        .map(id => assets.find(a => a.id === id)?.image)
-        .filter((img): img is IngredientImage => img !== null);
+      // Initialize ShotBook
+      const initialShots: Shot[] = rawShots.map((s: any) => ({
+        id: s.id,
+        status: ShotStatus.PENDING_JSON,
+        pitch: s.pitch,
+        selectedAssetIds: [], // Will be filled below
+      }));
+      setShotBook(initialShots);
 
-      // Pass aspect ratio from VEO JSON if available
-      const aspectRatio = shot.veoJson?.veo_shot.scene.aspect_ratio || '16:9';
+      // 3. Generate Scene Names
+      addLogEntry('Grouping shots and naming scenes...', LogType.STEP);
+      const sceneNamesData = await generateSceneNames(rawShots, scriptInput);
+      const sceneNameMap = sceneNamesData.result.names;
+      updateApiSummary(sceneNamesData.tokens, 'flash');
 
-      const {result: imageBase64} = await generateKeyframeImage(
-        shot.keyframePromptText || shot.pitch, // Fallback to pitch if no prompt text
-        ingredientImages,
-        aspectRatio
-      );
+      // Update shots with scene names
+      const shotsWithScenes = initialShots.map(shot => {
+         // get prefix from shot id (e.g. ep1_scene1)
+         const lastUnderscore = shot.id.lastIndexOf('_');
+         const sceneId = lastUnderscore !== -1 ? shot.id.substring(0, lastUnderscore) : shot.id;
+         return { ...shot, sceneName: sceneNameMap.get(sceneId) || sceneId };
+      });
+      setShotBook(shotsWithScenes);
+
+      // 4. Generate Scene Plans (One per scene)
+      addLogEntry('Generating Scene Plans for continuity...', LogType.STEP);
+      // Group by scene
+      const sceneGroups = new Map<string, Shot[]>();
+      shotsWithScenes.forEach(shot => {
+          const lastUnderscore = shot.id.lastIndexOf('_');
+          const sceneId = lastUnderscore !== -1 ? shot.id.substring(0, lastUnderscore) : shot.id;
+          if (!sceneGroups.has(sceneId)) sceneGroups.set(sceneId, []);
+          sceneGroups.get(sceneId)?.push(shot);
+      });
+
+      const plans: ScenePlan[] = [];
+      for (const [sceneId, shots] of sceneGroups) {
+          if (stopGenerationRef.current) throw new Error("Generation stopped by user.");
+          await delay(API_CALL_DELAY_MS);
+          const pitches = shots.map(s => `${s.id}: ${s.pitch}`).join('\n');
+          try {
+              const planData = await generateScenePlan(sceneId, pitches, scriptInput);
+              plans.push(planData.result);
+              updateApiSummary(planData.tokens, 'pro');
+              addLogEntry(`Plan generated for scene: ${sceneId}`, LogType.INFO);
+          } catch (e) {
+              console.error(`Failed to generate plan for ${sceneId}`, e);
+          }
+      }
+      setScenePlans(plans);
+
+      // 5. Generate VEO JSON and Keyframes (Iterative)
+      const finalShots = [...shotsWithScenes];
       
-      setApiCallSummary((prev) => ({...prev, image: prev.image + 1}));
+      for (let i = 0; i < finalShots.length; i++) {
+        if (stopGenerationRef.current) break;
+        
+        const shot = finalShots[i];
+        
+        // Match Assets Logic
+        const matchedAssetIds: string[] = [];
+        // A simple keyword matching strategy
+        assets.forEach(asset => {
+            const matchesName = shot.pitch.toLowerCase().includes(asset.name.toLowerCase());
+            // You could add description matching here too
+            if (matchesName) matchedAssetIds.push(asset.id);
+        });
+        // Also check against scene name for locations
+        if (shot.sceneName) {
+            assets.filter(a => a.type === 'location').forEach(loc => {
+                if (shot.sceneName?.toLowerCase().includes(loc.name.toLowerCase())) {
+                    if (!matchedAssetIds.includes(loc.id)) matchedAssetIds.push(loc.id);
+                }
+            });
+        }
+        finalShots[i].selectedAssetIds = matchedAssetIds;
 
-      setShotBook((current) =>
-        current!.map((s) =>
-          s.id === shotId
-            ? {
-                ...s,
-                keyframeImage: imageBase64,
-                status: ShotStatus.NEEDS_REVIEW,
-              }
-            : s,
-        ),
-      );
-      addLogEntry(`Keyframe regenerated for ${shotId}.`, LogType.SUCCESS);
-    } catch (error) {
-      console.error(`Failed to regenerate image for ${shotId}:`, error);
-      setShotBook((current) =>
-        current!.map((s) =>
-          s.id === shotId
-            ? {
-                ...s,
-                status: ShotStatus.GENERATION_FAILED,
-                errorMessage: 'Regeneration failed.',
-              }
-            : s,
-        ),
-      );
-      addLogEntry(`Failed to regenerate keyframe for ${shotId}.`, LogType.ERROR);
+        // --- Generate VEO JSON ---
+        setShotBook((prev) =>
+          prev ? prev.map((s, idx) => idx === i ? { ...s, status: ShotStatus.GENERATING_JSON } : s) : null
+        );
+        
+        // Find relevant Scene Plan
+        const lastUnderscore = shot.id.lastIndexOf('_');
+        const sceneId = lastUnderscore !== -1 ? shot.id.substring(0, lastUnderscore) : shot.id;
+        const relevantPlan = plans.find(p => p.scene_id === sceneId) || null;
+
+        await delay(API_CALL_DELAY_MS);
+        try {
+          const jsonData = await generateVeoJson(shot.pitch, shot.id, scriptInput, relevantPlan);
+          finalShots[i].veoJson = jsonData.result;
+          finalShots[i].status = ShotStatus.PENDING_KEYFRAME_PROMPT;
+          updateApiSummary(jsonData.tokens, 'pro');
+          
+          setShotBook((prev) =>
+             prev ? prev.map((s, idx) => idx === i ? { ...s, veoJson: jsonData.result, status: ShotStatus.PENDING_KEYFRAME_PROMPT } : s) : null
+          );
+
+          // Update asset matching based on VEO JSON specific fields if available
+          if (jsonData.result.veo_shot.character.name && jsonData.result.veo_shot.character.name !== "N/A") {
+             const charName = jsonData.result.veo_shot.character.name;
+             const charAsset = assets.find(a => a.type === 'character' && (a.name.toLowerCase().includes(charName.toLowerCase()) || charName.toLowerCase().includes(a.name.toLowerCase())));
+             if (charAsset && !finalShots[i].selectedAssetIds.includes(charAsset.id)) {
+                 finalShots[i].selectedAssetIds.push(charAsset.id);
+             }
+          }
+          // Prop matching
+          assets.filter(a => a.type === 'prop').forEach(prop => {
+             // Check context or behavior safely with optional chaining or default empty string
+             const context = (jsonData.result.veo_shot.scene.context || '').toLowerCase();
+             const behavior = (jsonData.result.veo_shot.character.behavior || '').toLowerCase();
+             if (context.includes(prop.name.toLowerCase()) || behavior.includes(prop.name.toLowerCase())) {
+                 if (!finalShots[i].selectedAssetIds.includes(prop.id)) finalShots[i].selectedAssetIds.push(prop.id);
+             }
+          });
+           // Style matching
+          assets.filter(a => a.type === 'style').forEach(style => {
+             // Check visual style safely
+             const visualStyle = (jsonData.result.veo_shot.scene.visual_style || '').toLowerCase();
+             if (visualStyle.includes(style.name.toLowerCase())) {
+                 if (!finalShots[i].selectedAssetIds.includes(style.id)) finalShots[i].selectedAssetIds.push(style.id);
+             }
+          });
+
+        } catch (e) {
+          console.error(`Error generating JSON for ${shot.id}`, e);
+          finalShots[i].status = ShotStatus.GENERATION_FAILED;
+           setShotBook((prev) =>
+             prev ? prev.map((s, idx) => idx === i ? { ...s, status: ShotStatus.GENERATION_FAILED } : s) : null
+          );
+          continue;
+        }
+
+        // --- Generate Keyframe Prompt ---
+        if (createKeyframes) {
+             setShotBook((prev) =>
+                prev ? prev.map((s, idx) => idx === i ? { ...s, status: ShotStatus.GENERATING_KEYFRAME_PROMPT } : s) : null
+             );
+             await delay(API_CALL_DELAY_MS);
+             try {
+                 const promptData = await generateKeyframePromptText(finalShots[i].veoJson!.veo_shot);
+                 finalShots[i].keyframePromptText = promptData.result;
+                 updateApiSummary(promptData.tokens, 'pro');
+                 
+                  setShotBook((prev) =>
+                    prev ? prev.map((s, idx) => idx === i ? { ...s, keyframePromptText: promptData.result, status: ShotStatus.GENERATING_IMAGE } : s) : null
+                  );
+
+                 // --- Generate Image ---
+                 await delay(API_CALL_DELAY_MS);
+                 
+                 // Collect asset images
+                 const ingredientImages: IngredientImage[] = [];
+                 finalShots[i].selectedAssetIds.forEach(id => {
+                     const asset = assets.find(a => a.id === id);
+                     if (asset && asset.image) ingredientImages.push(asset.image);
+                 });
+
+                 // Get aspect ratio from JSON or default to 16:9
+                 const aspectRatio = finalShots[i].veoJson?.veo_shot.scene.aspect_ratio || "16:9";
+
+                 const imageData = await generateKeyframeImage(finalShots[i].keyframePromptText!, ingredientImages, aspectRatio);
+                 finalShots[i].keyframeImage = imageData.result;
+                 finalShots[i].status = ShotStatus.NEEDS_REVIEW;
+                 updateApiSummary({input: 0, output: 0}, 'image');
+                 
+                 setShotBook((prev) =>
+                    prev ? prev.map((s, idx) => idx === i ? { ...s, keyframeImage: imageData.result, status: ShotStatus.NEEDS_REVIEW } : s) : null
+                 );
+
+             } catch (e) {
+                 console.error(`Error generating image for ${shot.id}`, e);
+                 finalShots[i].status = ShotStatus.GENERATION_FAILED;
+                 finalShots[i].errorMessage = (e as Error).message;
+                  setShotBook((prev) =>
+                    prev ? prev.map((s, idx) => idx === i ? { ...s, status: ShotStatus.GENERATION_FAILED, errorMessage: (e as Error).message } : s) : null
+                  );
+             }
+        } else {
+             finalShots[i].status = ShotStatus.NEEDS_KEYFRAME_GENERATION;
+             setShotBook((prev) =>
+                prev ? prev.map((s, idx) => idx === i ? { ...s, status: ShotStatus.NEEDS_KEYFRAME_GENERATION } : s) : null
+             );
+        }
+      }
+
+      addLogEntry('Generation process completed!', LogType.SUCCESS);
+      setAppState(AppState.SUCCESS);
+
+    } catch (e) {
+      console.error('Generation Error:', e);
+      setErrorMessage((e as Error).message || 'An unexpected error occurred.');
+      setAppState(AppState.ERROR);
+      addLogEntry(`Error: ${(e as Error).message}`, LogType.ERROR);
+    } finally {
+        setIsProcessing(false);
+        stopGenerationRef.current = false;
     }
   };
 
   const handleUpdateShot = (updatedShot: Shot) => {
-    setShotBook((current) =>
-      current ? current.map((s) => (s.id === updatedShot.id ? updatedShot : s)) : null,
-    );
-  };
-
-  const handleUpdateShotIngredients = (
-    shotId: string,
-    newImages: IngredientImage[],
-  ) => {
-    setShotBook((current) =>
-      current
-        ? current.map((s) =>
-            s.id === shotId ? {...s, ingredientImages: newImages} : s,
-          )
-        : null,
+    setShotBook((prev) =>
+      prev ? prev.map((s) => (s.id === updatedShot.id ? updatedShot : s)) : null,
     );
   };
   
   const handleToggleAssetForShot = (shotId: string, assetId: string) => {
-      setShotBook(current => {
-          if (!current) return null;
-          return current.map(s => {
-              if (s.id !== shotId) return s;
-              
-              const currentAssets = s.selectedAssetIds || [];
-              const isSelected = currentAssets.includes(assetId);
-              
-              let newAssets;
-              if (isSelected) {
-                  newAssets = currentAssets.filter(id => id !== assetId);
-              } else {
-                  if (currentAssets.length >= 3) {
-                       alert("Maximum 3 assets per shot allowed.");
-                       return s;
-                  }
-                  newAssets = [...currentAssets, assetId];
+      setShotBook(prev => {
+          if (!prev) return null;
+          return prev.map(s => {
+              if (s.id === shotId) {
+                  const currentIds = s.selectedAssetIds || [];
+                  const newIds = currentIds.includes(assetId) 
+                     ? currentIds.filter(id => id !== assetId)
+                     : [...currentIds, assetId];
+                  return { ...s, selectedAssetIds: newIds };
               }
-              
-              return { ...s, selectedAssetIds: newAssets };
+              return s;
           });
       });
   };
 
-  const handleRequestNewProject = () => {
-    setShowNewProjectDialog(true);
-  };
+  const handleGenerateSpecificKeyframe = async (shotId: string) => {
+      // Find the shot
+      const shotIndex = shotBook?.findIndex(s => s.id === shotId) ?? -1;
+      if (shotIndex === -1 || !shotBook) return;
+      const shot = shotBook[shotIndex];
 
-  const confirmNewProject = () => {
-    stopGenerationRef.current = true; // Force stop any running loop
-    setIsProcessing(false);
-    
-    setAppState(AppState.IDLE);
-    setShotBook(null);
-    setErrorMessage(null);
-    setProjectName(null);
-    setScenePlans(null);
-    setLastPrompt(null); // Ensure last prompt is cleared
-    setLogEntries([]);
-    setApiCallSummary({
-      pro: 0,
-      flash: 0,
-      image: 0,
-      proTokens: {input: 0, output: 0},
-      flashTokens: {input: 0, output: 0},
-    });
-    
-    // Note: Assets are NOT cleared from state, preserving the library.
-    
-    // Manually update local storage to reflect the cleared state but kept assets
-    try {
-      // Strip images from asset persistence in LS as well
-      const assetsLite = assets.map(a => ({ ...a, image: null }));
-      
-      const stateToSave = {
-        appState: AppState.IDLE,
-        shotBook: null,
-        errorMessage: null,
-        projectName: null,
-        scenePlans: null,
-        assets: assetsLite, // Preserved but stripped of images
-        lastPrompt: null,
-        logEntries: [],
-        apiCallSummary: {
-            pro: 0, flash: 0, image: 0,
-            proTokens: {input: 0, output: 0},
-            flashTokens: {input: 0, output: 0},
-        },
+      // Update UI state
+      const updateShotStatus = (status: ShotStatus, extra?: Partial<Shot>) => {
+           setShotBook(prev => prev ? prev.map((s, i) => i === shotIndex ? { ...s, status, ...extra } : s) : null);
       };
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stateToSave));
-    } catch (error) {
-      console.warn('Storage full or broken, clearing storage completely to ensure new project loads correctly.');
-      localStorage.removeItem(LOCAL_STORAGE_KEY);
-    }
-    
-    setShowNewProjectDialog(false);
+
+      try {
+          // If no prompt text yet, generate it
+          let promptText = shot.keyframePromptText;
+          if (!promptText && shot.veoJson) {
+              updateShotStatus(ShotStatus.GENERATING_KEYFRAME_PROMPT);
+              const promptData = await generateKeyframePromptText(shot.veoJson.veo_shot);
+              promptText = promptData.result;
+              updateApiSummary(promptData.tokens, 'pro');
+          }
+
+          if (promptText) {
+             updateShotStatus(ShotStatus.GENERATING_IMAGE, { keyframePromptText: promptText });
+             
+             // Collect assets
+             const ingredientImages: IngredientImage[] = [];
+             (shot.selectedAssetIds || []).forEach(id => {
+                 const asset = assets.find(a => a.id === id);
+                 if (asset && asset.image) ingredientImages.push(asset.image);
+             });
+
+             const aspectRatio = shot.veoJson?.veo_shot.scene.aspect_ratio || "16:9";
+
+             const imageData = await generateKeyframeImage(promptText, ingredientImages, aspectRatio);
+             updateApiSummary({input: 0, output: 0}, 'image');
+             updateShotStatus(ShotStatus.NEEDS_REVIEW, { keyframeImage: imageData.result, errorMessage: undefined });
+             addLogEntry(`Regenerated keyframe for ${shotId}`, LogType.SUCCESS);
+          } else {
+              throw new Error("Missing JSON or Prompt Text");
+          }
+
+      } catch (e) {
+          updateShotStatus(ShotStatus.GENERATION_FAILED, { errorMessage: (e as Error).message });
+          addLogEntry(`Failed to regenerate keyframe for ${shotId}`, LogType.ERROR);
+      }
   };
 
-  const handleLoadProject = (jsonString: string) => {
-      try {
-          stopGenerationRef.current = true; // Stop any running process
-          
-          const parsed = JSON.parse(jsonString);
-          if (!parsed.shotBook || !Array.isArray(parsed.shotBook)) {
-              throw new Error("Invalid project file format.");
-          }
-          setShotBook(parsed.shotBook);
-          setAppState(parsed.appState || AppState.SUCCESS);
-          setProjectName(parsed.projectName || "Loaded Project");
-          setScenePlans(parsed.scenePlans || null);
-          setAssets(parsed.assets || []);
-          setLogEntries(parsed.logEntries || []);
-          setLastPrompt(parsed.lastPrompt || null);
-          if (parsed.apiCallSummary) setApiCallSummary(parsed.apiCallSummary);
-          
-          addLogEntry("Project loaded successfully.", LogType.SUCCESS);
-      } catch (e) {
-          console.error("Load error", e);
-          alert("Failed to load project file.");
+  const handleRefineShot = async (shotId: string, feedback: string) => {
+      const shotIndex = shotBook?.findIndex(s => s.id === shotId) ?? -1;
+      if (shotIndex === -1 || !shotBook) return;
+      const shot = shotBook[shotIndex];
+
+      if (!shot.veoJson) {
+          alert("Cannot refine a shot without existing JSON.");
+          return;
       }
+      
+      addLogEntry(`Refining ${shotId} with Director's feedback...`, LogType.INFO);
+
+      // Update status
+      setShotBook(prev => prev ? prev.map((s, i) => i === shotIndex ? { ...s, status: ShotStatus.GENERATING_JSON } : s) : null);
+
+      try {
+          // 1. Refine JSON
+          const refinedData = await refineVeoJson(shot.veoJson, feedback);
+          updateApiSummary(refinedData.tokens, 'pro');
+          const newJson = refinedData.result;
+
+          setShotBook(prev => prev ? prev.map((s, i) => i === shotIndex ? { ...s, veoJson: newJson, status: ShotStatus.PENDING_KEYFRAME_PROMPT } : s) : null);
+
+          // 2. Regenerate Prompt
+          const promptData = await generateKeyframePromptText(newJson.veo_shot);
+          updateApiSummary(promptData.tokens, 'pro');
+          const newPrompt = promptData.result;
+
+          setShotBook(prev => prev ? prev.map((s, i) => i === shotIndex ? { ...s, keyframePromptText: newPrompt, status: ShotStatus.GENERATING_IMAGE } : s) : null);
+
+          // 3. Regenerate Image
+          const ingredientImages: IngredientImage[] = [];
+             (shot.selectedAssetIds || []).forEach(id => {
+                 const asset = assets.find(a => a.id === id);
+                 if (asset && asset.image) ingredientImages.push(asset.image);
+          });
+          const aspectRatio = newJson.veo_shot.scene.aspect_ratio || "16:9";
+          const imageData = await generateKeyframeImage(newPrompt, ingredientImages, aspectRatio);
+          updateApiSummary({input: 0, output: 0}, 'image');
+
+          setShotBook(prev => prev ? prev.map((s, i) => i === shotIndex ? { ...s, keyframeImage: imageData.result, status: ShotStatus.NEEDS_REVIEW, errorMessage: undefined } : s) : null);
+          addLogEntry(`Refinement complete for ${shotId}`, LogType.SUCCESS);
+
+      } catch (e) {
+          console.error("Refinement failed", e);
+          setShotBook(prev => prev ? prev.map((s, i) => i === shotIndex ? { ...s, status: ShotStatus.GENERATION_FAILED, errorMessage: "Refinement Failed" } : s) : null);
+          addLogEntry(`Refinement failed for ${shotId}`, LogType.ERROR);
+      }
+  };
+
+  // VEO API HANDLERS
+  const handleGenerateVeoVideo = async (shotId: string) => {
+      if (!veoApiKey) {
+          alert("Please enter your Veo API Key in the settings.");
+          return;
+      }
+
+      const shotIndex = shotBook?.findIndex(s => s.id === shotId) ?? -1;
+      if (shotIndex === -1 || !shotBook) return;
+      const shot = shotBook[shotIndex];
+
+      if (!shot.keyframePromptText) {
+          alert("Keyframe prompt is missing.");
+          return;
+      }
+
+      // Update Status
+      setShotBook(prev => prev ? prev.map((s, i) => i === shotIndex ? { ...s, veoStatus: VeoStatus.QUEUED } : s) : null);
+      addLogEntry(`Submitting video generation task for ${shotId}...`, LogType.INFO);
+
+      try {
+          const response = await generateVeoVideo(veoApiKey, {
+              prompt: shot.keyframePromptText,
+              model: 'veo3_fast', // Using fast model for preview speed
+              aspectRatio: shot.veoJson?.veo_shot.scene.aspect_ratio || '16:9'
+          });
+
+          setShotBook(prev => prev ? prev.map((s, i) => i === shotIndex ? { ...s, veoStatus: VeoStatus.GENERATING, veoTaskId: response.data.taskId } : s) : null);
+          addLogEntry(`Task submitted for ${shotId} (ID: ${response.data.taskId})`, LogType.SUCCESS);
+      } catch (e) {
+          console.error("Veo Generate Failed", e);
+          setShotBook(prev => prev ? prev.map((s, i) => i === shotIndex ? { ...s, veoStatus: VeoStatus.FAILED, veoError: (e as Error).message } : s) : null);
+          addLogEntry(`Failed to submit video task for ${shotId}`, LogType.ERROR);
+      }
+  };
+
+  const handleExtendVeoVideo = async (originalShotId: string, prompt: string) => {
+      if (!veoApiKey) { alert("Please set Veo API Key"); return; }
+      if (!shotBook) return;
+
+      const originalShotIndex = shotBook.findIndex(s => s.id === originalShotId);
+      if (originalShotIndex === -1) return;
+      const originalShot = shotBook[originalShotIndex];
+
+      if (!originalShot.veoTaskId) {
+          alert("Cannot extend a shot that hasn't been generated yet.");
+          return;
+      }
+      
+      const newShotId = `${originalShot.id}_ext_${Date.now().toString().slice(-4)}`;
+      addLogEntry(`Creating extension shot: ${newShotId}...`, LogType.INFO);
+
+      // Create new shot object
+      const newShot: Shot = {
+          id: newShotId,
+          status: ShotStatus.NEEDS_REVIEW, // Skip Gemini image generation
+          pitch: `Extension: ${prompt}`,
+          sceneName: originalShot.sceneName,
+          selectedAssetIds: originalShot.selectedAssetIds,
+          keyframePromptText: prompt, // Use the extend prompt as the text
+          veoStatus: VeoStatus.QUEUED,
+          // Create a dummy JSON for display
+          veoJson: { 
+              ...originalShot.veoJson!, 
+              unit_type: 'extend', 
+              directorNotes: prompt,
+              veo_shot: { ...originalShot.veoJson!.veo_shot, shot_id: newShotId }
+          }
+      };
+
+      // Insert new shot after original
+      const newShotBook = [...shotBook];
+      newShotBook.splice(originalShotIndex + 1, 0, newShot);
+      setShotBook(newShotBook);
+
+      try {
+          const response = await extendVeoVideo(veoApiKey, {
+              taskId: originalShot.veoTaskId,
+              prompt: prompt
+          });
+
+          setShotBook(prev => prev ? prev.map(s => {
+              if (s.id === newShotId) {
+                  return { ...s, veoStatus: VeoStatus.GENERATING, veoTaskId: response.data.taskId };
+              }
+              return s;
+          }) : null);
+          addLogEntry(`Extension task started (ID: ${response.data.taskId})`, LogType.SUCCESS);
+
+      } catch (e) {
+          console.error("Veo Extend Failed", e);
+          setShotBook(prev => prev ? prev.map(s => {
+              if (s.id === newShotId) {
+                  return { ...s, veoStatus: VeoStatus.FAILED, veoError: (e as Error).message };
+              }
+              return s;
+          }) : null);
+          addLogEntry(`Extension failed: ${(e as Error).message}`, LogType.ERROR);
+      }
+  };
+
+
+  // EXPORT HANDLERS
+  const handleLoadProject = (jsonString: string) => {
+    try {
+      const parsed = JSON.parse(jsonString);
+      // Validate or sanitize if needed
+      if (parsed.shotBook) setShotBook(parsed.shotBook);
+      if (parsed.projectName) setProjectName(parsed.projectName);
+      if (parsed.logEntries) setLogEntries(parsed.logEntries);
+      if (parsed.apiCallSummary) setApiCallSummary(parsed.apiCallSummary);
+      if (parsed.scenePlans) setScenePlans(parsed.scenePlans);
+      if (parsed.assets) setAssets(parsed.assets);
+      
+      setAppState(AppState.SUCCESS);
+      addLogEntry('Project loaded successfully.', LogType.SUCCESS);
+    } catch (e) {
+      alert('Failed to load project file. It may be corrupted.');
+    }
   };
 
   const handleSaveProject = () => {
-      const stateToSave = {
-          appState,
+     // Include everything in the save file (including heavy images)
+     const stateToSave = {
           shotBook,
-          errorMessage,
           projectName,
-          scenePlans,
-          assets,
-          lastPrompt,
           logEntries,
           apiCallSummary,
-          version: PROJECT_VERSION
-      };
-      const blob = new Blob([JSON.stringify(stateToSave, null, 2)], {type: "application/json"});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${projectName || 'veo-project'}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+          scenePlans,
+          assets
+     };
+     const blob = new Blob([JSON.stringify(stateToSave, null, 2)], {type: 'application/json'});
+     const url = URL.createObjectURL(blob);
+     const a = document.createElement('a');
+     a.href = url;
+     a.download = `${projectName || 'veo-project'}.json`;
+     a.click();
+     URL.revokeObjectURL(url);
   };
 
-  // NEW: Structured Export for External Organizers
   const handleExportPackage = async () => {
-    if (!shotBook) return;
-    if (typeof JSZip === 'undefined') {
-        alert('Export library (JSZip) not loaded. Please check your internet connection and reload.');
+    if (!JSZip) {
+        alert("JSZip library not loaded. Cannot export.");
         return;
     }
-    try {
-        const zip = new JSZip();
-        const root = zip.folder(projectName || "New_Project");
-
-        // 1. Assets Folder
-        const assetsFolder = root.folder("Assets");
-        
-        // Create type subfolders
-        const charFolder = assetsFolder.folder("Characters");
-        const locFolder = assetsFolder.folder("Locations");
-        const otherFolder = assetsFolder.folder("Other");
-
-        assets.forEach(asset => {
-            let targetFolder = otherFolder;
-            if (asset.type === 'character') targetFolder = charFolder;
-            if (asset.type === 'location') targetFolder = locFolder;
-
-            // Save Image
-            if (asset.image) {
-                const ext = asset.image.mimeType.split('/')[1] || 'png';
-                const safeName = asset.name.replace(/[^a-z0-9]/gi, '_').toLowerCase();
-                targetFolder.file(`${safeName}.${ext}`, asset.image.base64, {base64: true});
-                
-                // Save Sidecar Metadata (Perfect for AI Organizers)
-                const metadata = {
-                    name: asset.name,
-                    description: asset.description,
-                    type: asset.type,
-                    veo_context: "VEO Prompt Machine Asset",
-                    id: asset.id
-                };
-                targetFolder.file(`${safeName}.json`, JSON.stringify(metadata, null, 2));
-            }
-        });
-
-        // 2. Source Script
-        if (lastPrompt?.script) {
-            root.folder("Source").file("script.txt", lastPrompt.script);
+    
+    addLogEntry("Packaging project for export...", LogType.INFO);
+    const zip = new JSZip();
+    const root = zip.folder(projectName || "veo-project");
+    
+    // 1. Assets
+    const assetsFolder = root.folder("01_Assets");
+    
+    // Characters
+    const charsFolder = assetsFolder.folder("Characters");
+    assets.filter(a => a.type === 'character').forEach(a => {
+        if (a.image) {
+            charsFolder.file(`${a.name.replace(/\s+/g, '_')}.png`, a.image.base64, {base64: true});
         }
+        charsFolder.file(`${a.name.replace(/\s+/g, '_')}_meta.json`, JSON.stringify(a, null, 2));
+    });
 
-        // 3. Production Data
-        const prodFolder = root.folder("Production");
-        prodFolder.file("shot_list.json", JSON.stringify(shotBook, null, 2));
-        
-        // Save individual VEO JSONs
-        const promptsFolder = prodFolder.folder("Prompts");
-        shotBook.forEach(shot => {
-            if (shot.veoJson) {
-                promptsFolder.file(`${shot.id}.json`, JSON.stringify(shot.veoJson, null, 2));
-            }
-        });
+    // Locations
+    const locsFolder = assetsFolder.folder("Locations");
+    assets.filter(a => a.type === 'location').forEach(a => {
+        if (a.image) {
+            locsFolder.file(`${a.name.replace(/\s+/g, '_')}.png`, a.image.base64, {base64: true});
+        }
+    });
 
-        const content = await zip.generateAsync({type: "blob"});
-        const url = URL.createObjectURL(content);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${projectName || 'project'}_organizer_package.zip`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    } catch (e) {
-        console.error("Export failed:", e);
-        alert("Failed to create export package. See console for details.");
+    // Props & Styles
+    const propsFolder = assetsFolder.folder("Props_And_Styles");
+    assets.filter(a => a.type === 'prop' || a.type === 'style').forEach(a => {
+        if (a.image) {
+             propsFolder.file(`${a.type}_${a.name.replace(/\s+/g, '_')}.png`, a.image.base64, {base64: true});
+        }
+    });
+
+    // 2. Script
+    if (lastPrompt?.script) {
+        root.folder("02_Script").file("source_script.txt", lastPrompt.script);
     }
+
+    // 3. Production (JSONs + Shotlist)
+    const prodFolder = root.folder("03_Production");
+    prodFolder.file("full_shot_list.json", JSON.stringify(shotBook, null, 2));
+    
+    shotBook?.forEach((shot, i) => {
+        if (shot.veoJson) {
+            prodFolder.file(`shot_${String(i+1).padStart(3, '0')}_${shot.id}.json`, JSON.stringify(shot.veoJson, null, 2));
+        }
+    });
+
+    // Generate Zip
+    const content = await zip.generateAsync({type: "blob"});
+    const url = URL.createObjectURL(content);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${projectName || 'veo-project'}_PACKAGE.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+    addLogEntry("Export package downloaded.", LogType.SUCCESS);
   };
 
   const handleExportAllJsons = async () => {
-    if (!shotBook) return;
-    if (typeof JSZip === 'undefined') {
-        alert('Export library (JSZip) not loaded. Please check your internet connection and reload.');
-        return;
-    }
-    try {
-        const zip = new JSZip();
-        const folder = zip.folder("veo_jsons");
-        
-        shotBook.forEach((shot) => {
-            if (shot.veoJson) {
-                folder.file(`${shot.id}.json`, JSON.stringify(shot.veoJson, null, 2));
-            }
-        });
-        
-        const content = await zip.generateAsync({type: "blob"});
-        const url = URL.createObjectURL(content);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${projectName || 'project'}_veo_jsons.zip`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    } catch (e) {
-        console.error("Export JSONs failed:", e);
-    }
-  };
-
-  const handleExportHtmlReport = () => {
-    if (!shotBook) return;
-    const html = generateMasterShotlistHtml(
-      shotBook,
-      projectName || 'Untitled Project',
-      apiCallSummary,
-      PROJECT_VERSION,
-    );
-    const blob = new Blob([html], {type: 'text/html'});
-    const url = URL.createObjectURL(blob);
+    if (!JSZip || !shotBook) return;
+    const zip = new JSZip();
+    shotBook.forEach((shot) => {
+      if (shot.veoJson) {
+        zip.file(`${shot.id}.json`, JSON.stringify(shot.veoJson, null, 2));
+      }
+    });
+    const content = await zip.generateAsync({type: 'blob'});
+    const url = URL.createObjectURL(content);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${projectName || 'project'}_report.html`;
-    document.body.appendChild(a);
+    a.download = `${projectName || 'shots'}-jsons.zip`;
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
-  
+
   const handleDownloadKeyframesZip = async () => {
+     if (!JSZip || !shotBook) return;
+     const zip = new JSZip();
+     let count = 0;
+     shotBook.forEach((shot) => {
+         if (shot.keyframeImage) {
+             zip.file(`${shot.id}.png`, shot.keyframeImage, {base64: true});
+             count++;
+         }
+     });
+
+     if (count === 0) {
+         alert("No keyframes to download.");
+         return;
+     }
+
+     const content = await zip.generateAsync({type: 'blob'});
+     const url = URL.createObjectURL(content);
+     const a = document.createElement('a');
+     a.href = url;
+     a.download = `${projectName || 'project'}-keyframes.zip`;
+     a.click();
+     URL.revokeObjectURL(url);
+  };
+  
+  const handleExportHtmlReport = () => {
       if (!shotBook) return;
-      if (typeof JSZip === 'undefined') {
-        alert('Export library (JSZip) not loaded. Please check your internet connection and reload.');
-        return;
-      }
-      try {
-          const zip = new JSZip();
-          const folder = zip.folder("keyframes");
-          
-          let count = 0;
-          shotBook.forEach(shot => {
-              if (shot.keyframeImage) {
-                  folder.file(`${shot.id}.png`, shot.keyframeImage, {base64: true});
-                  count++;
-              }
-          });
-          
-          if (count === 0) {
-              alert("No keyframes to download.");
-              return;
-          }
+      const html = generateMasterShotlistHtml(shotBook, projectName || 'Untitled', apiCallSummary, PROJECT_VERSION);
+      const blob = new Blob([html], {type: 'text/html'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${projectName || 'report.html'}`;
+      a.click();
+      URL.revokeObjectURL(url);
+  };
 
-          const content = await zip.generateAsync({type: "blob"});
-          const url = URL.createObjectURL(content);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `${projectName || 'project'}_keyframes.zip`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-      } catch (e) {
-          console.error("Export keyframes failed:", e);
-      }
-  }
+  const handleNewProject = () => {
+      setShowNewProjectDialog(true);
+  };
 
+  const confirmNewProject = () => {
+      // Clear state but preserve assets logic if needed (Currently clears everything except API key)
+      // Actually, feature request was to KEEP assets.
+      setShotBook(null);
+      setProjectName(null);
+      setLogEntries([]);
+      setApiCallSummary({pro: 0, flash: 0, image: 0, proTokens: {input: 0, output: 0}, flashTokens: {input: 0, output: 0}});
+      setScenePlans(null);
+      setAppState(AppState.IDLE);
+      setLastPrompt(null);
+      setErrorMessage(null);
+      // NOTE: We do NOT clear assets here, allowing persistence across sessions!
+      // setAssets([]); 
+      
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
+      setShowNewProjectDialog(false);
+  };
+
+  const handleStopGeneration = () => {
+      stopGenerationRef.current = true;
+      setIsProcessing(false);
+      addLogEntry("Stopping generation... finishing current step.", LogType.INFO);
+  };
 
   return (
-    <div className="min-h-screen bg-black text-white font-sans selection:bg-indigo-500/30">
+    <div className="min-h-screen font-sans text-gray-100 bg-[#121212]">
+      {/* Loading Overlay */}
+      {appState === AppState.LOADING && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm">
+           <LoadingIndicator />
+           <div className="absolute bottom-10">
+               <button onClick={handleStopGeneration} className="px-6 py-2 bg-red-800 hover:bg-red-700 text-white rounded-lg flex items-center gap-2">
+                   <StopCircleIcon className="w-5 h-5" /> Stop
+               </button>
+           </div>
+        </div>
+      )}
+      
+      {/* Dialogs */}
       {showApiKeyDialog && (
-        <ApiKeyDialog
-          onContinue={async () => {
-             if (window.aistudio) {
-                 try {
-                     await window.aistudio.openSelectKey();
-                     setShowApiKeyDialog(false);
-                 } catch (e) {
-                     console.error("Key selection failed", e);
-                 }
-             } else {
-                 setShowApiKeyDialog(false);
-             }
-          }}
-        />
+        <ApiKeyDialog onContinue={() => {
+            setShowApiKeyDialog(false);
+            // Trigger logic to open Google's API key selector would go here if not using env
+            // For now, this is just a gate.
+        }} />
       )}
       
       <ConfirmDialog 
         isOpen={showNewProjectDialog}
         title="Start New Project?"
-        message={`Are you sure you want to start a new project?\n\nThis will clear your current script and shot list.\nHowever, your Asset Library will be preserved so you can reuse characters and locations.`}
+        message={`Are you sure? This will clear the current script and shot list.\n\nYour **Asset Library** will be preserved.`}
         onConfirm={confirmNewProject}
         onCancel={() => setShowNewProjectDialog(false)}
       />
 
       <StorageInfoDialog 
-        isOpen={showStorageInfoDialog}
-        onClose={() => setShowStorageInfoDialog(false)}
+         isOpen={showStorageInfoDialog}
+         onClose={() => setShowStorageInfoDialog(false)}
       />
 
-      {appState === AppState.IDLE && (
-        <div className="flex items-center justify-center min-h-screen p-4">
-          <ProjectSetupForm
-            onGenerate={handleGenerate}
-            isGenerating={isProcessing} // Updated check: removed redundant state check that caused type errors
-            onLoadProject={handleLoadProject}
-            
-            // Pass Asset Props
-            assets={assets}
-            onAnalyzeScriptForAssets={handleAnalyzeScriptForAssets}
-            isAnalyzingAssets={isAnalyzingAssets}
-            onAddAsset={handleAddAsset}
-            onRemoveAsset={handleRemoveAsset}
-            onUpdateAssetImage={handleUpdateAssetImage}
-          />
-        </div>
-      )}
-
-      {appState === AppState.LOADING && (
-        <div className="flex items-center justify-center min-h-screen">
-          <LoadingIndicator />
-        </div>
-      )}
-
-      {(appState === AppState.SUCCESS || appState === AppState.ERROR) &&
-        shotBook && (
-          <ShotBookDisplay
-            shotBook={shotBook}
-            logEntries={logEntries}
-            projectName={projectName}
-            scenePlans={scenePlans}
-            apiCallSummary={apiCallSummary}
-            appVersion={PROJECT_VERSION}
-            onNewProject={handleRequestNewProject}
-            onUpdateShot={handleUpdateShot}
-            onGenerateSpecificKeyframe={handleGenerateSpecificKeyframe}
-            
-            // UPDATED PROPS FOR ASSET MANAGEMENT
-            allIngredientImages={assets.filter(a => a.image).map(a => a.image!)} // For backward compatibility display if needed
-            onUpdateShotIngredients={handleUpdateShotIngredients} // Deprecated but kept
-            
-            // New Prop for asset toggling
-            allAssets={assets}
-            onToggleAssetForShot={handleToggleAssetForShot}
-
-            onExportAllJsons={handleExportAllJsons}
-            onExportHtmlReport={handleExportHtmlReport}
-            onSaveProject={handleSaveProject}
-            onDownloadKeyframesZip={handleDownloadKeyframesZip}
-            // New Export for Organizer
-            onExportPackage={handleExportPackage}
-            onShowStorageInfo={() => setShowStorageInfoDialog(true)}
-            
-            // New props for Stop Generation
-            isProcessing={isProcessing}
-            onStopGeneration={handleStopGeneration}
-          />
+      {/* App Layout */}
+      <main className="flex flex-col items-center p-4 md:p-8 min-h-screen max-w-[1920px] mx-auto">
+        
+        {appState === AppState.IDLE && (
+           <div className="flex flex-col items-center w-full max-w-4xl animate-in fade-in duration-700">
+             <div className="mb-8 text-center">
+                 <h1 className="text-5xl md:text-7xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 mb-4 tracking-tight">
+                    VEO Prompt Machine
+                 </h1>
+                 <p className="text-xl text-gray-400 max-w-2xl mx-auto">
+                    Transform your scripts into production-ready VEO 3.1 JSON prompts with AI-powered breakdown, keyframing, and smart asset management.
+                 </p>
+                 <div className="mt-2 text-xs text-gray-600 font-mono">v{PROJECT_VERSION}</div>
+             </div>
+             
+             <ProjectSetupForm 
+                onGenerate={handleGenerate}
+                isGenerating={false}
+                onLoadProject={handleLoadProject}
+                assets={assets}
+                onAnalyzeScriptForAssets={handleAnalyzeScriptForAssets}
+                isAnalyzingAssets={isAnalyzingAssets}
+                onAddAsset={handleAddAsset}
+                onRemoveAsset={handleRemoveAsset}
+                onUpdateAssetImage={handleUpdateAssetImage}
+             />
+           </div>
         )}
+
+        {appState !== AppState.IDLE && shotBook && (
+           <ShotBookDisplay 
+              shotBook={shotBook}
+              logEntries={logEntries}
+              projectName={projectName}
+              scenePlans={scenePlans}
+              apiCallSummary={apiCallSummary}
+              appVersion={PROJECT_VERSION}
+              onNewProject={handleNewProject}
+              onUpdateShot={handleUpdateShot}
+              onGenerateSpecificKeyframe={handleGenerateSpecificKeyframe}
+              onRefineShot={handleRefineShot}
+              allAssets={assets}
+              onToggleAssetForShot={handleToggleAssetForShot}
+              // Legacy/Empty
+              allIngredientImages={[]}
+              onUpdateShotIngredients={() => {}}
+              
+              onExportAllJsons={handleExportAllJsons}
+              onExportHtmlReport={handleExportHtmlReport}
+              onSaveProject={handleSaveProject}
+              onDownloadKeyframesZip={handleDownloadKeyframesZip}
+              onExportPackage={handleExportPackage}
+              onShowStorageInfo={() => setShowStorageInfoDialog(true)}
+              
+              isProcessing={isProcessing}
+              onStopGeneration={handleStopGeneration}
+
+              veoApiKey={veoApiKey}
+              onSetVeoApiKey={setVeoApiKey}
+              onGenerateVideo={handleGenerateVeoVideo}
+              onExtendVeoVideo={handleExtendVeoVideo} // Pass the new handler
+           />
+        )}
+        
+        {/* Footer */}
+        <footer className="mt-auto py-6 text-center text-gray-600 text-sm">
+            <p>Powered by Google Gemini 3 Pro & Veo 3.1 • VEO Prompt Machine V3</p>
+        </footer>
+      </main>
     </div>
   );
 };

@@ -35,7 +35,14 @@ import {
   X,
   XCircle,
   AlertTriangle,
-  StopCircle, // Import StopCircle
+  StopCircle,
+  FileAudio,
+  Clapperboard,
+  MessageSquarePlus,
+  Terminal,
+  Video, // New
+  Settings, // New
+  FastForward, // New
 } from 'lucide-react';
 
 const defaultProps = {
@@ -126,6 +133,10 @@ export const FileUploadIcon: React.FC<React.SVGProps<SVGSVGElement>> = (
   props,
 ) => <FileUp {...defaultProps} {...props} />;
 
+export const FileAudioIcon: React.FC<React.SVGProps<SVGSVGElement>> = (
+  props,
+) => <FileAudio {...defaultProps} {...props} />;
+
 export const ClockIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <Clock {...defaultProps} {...props} />
 );
@@ -168,6 +179,30 @@ export const AlertTriangleIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props
 
 export const StopCircleIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <StopCircle {...defaultProps} {...props} />
+);
+
+export const ClapperboardIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <Clapperboard {...defaultProps} {...props} />
+);
+
+export const MessageSquarePlusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <MessageSquarePlus {...defaultProps} {...props} />
+);
+
+export const TerminalIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <Terminal {...defaultProps} {...props} />
+);
+
+export const VideoIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <Video {...defaultProps} {...props} />
+);
+
+export const SettingsIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <Settings {...defaultProps} {...props} />
+);
+
+export const FastForwardIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <FastForward {...defaultProps} {...props} />
 );
 
 // This icon had a different stroke width in the original file, so we preserve it.

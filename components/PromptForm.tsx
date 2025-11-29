@@ -9,9 +9,11 @@ import {
   FileUploadIcon,
   UploadCloudIcon,
   XMarkIcon,
+  FileAudioIcon, // New import
 } from './icons';
 import AssetLibrary from './AssetLibrary';
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
+import { transcribeAudio } from '../services/audioService'; // New import
 
 // Setup PDF.js worker from a CDN. The mjs build is required for modules.
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@4.4.168/build/pdf.worker.mjs`;
@@ -56,8 +58,11 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
   const [script, setScript] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [createKeyframes, setCreateKeyframes] = useState(false); // Default to false for HIL
+  const [isTranscribing, setIsTranscribing] = useState(false); // New state
+
   const scriptFileInputRef = useRef<HTMLInputElement>(null);
   const projectFileInputRef = useRef<HTMLInputElement>(null);
+  const audioFileInputRef = useRef<HTMLInputElement>(null); // New ref
 
   const handleScriptFileUpload = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -108,12 +113,53 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
     [],
   );
 
+  const handleAudioFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    // Reset input
+    if (event.target) event.target.value = '';
+    setError(null);
+
+    // Simple size check (20MB soft limit for inline base64 safety)
+    if (file.size > 20 * 1024 * 1024) {
+        setError("Audio file is too large (max 20MB for browser upload). Please compress it or split it.");
+        return;
+    }
+
+    setIsTranscribing(true);
+    try {
+        const base64 = await fileToBase64(file);
+        const { result } = await transcribeAudio(base64, file.type);
+        
+        if (script.trim()) {
+            if (window.confirm("Append transcript to existing script? Cancel to replace.")) {
+                setScript(prev => prev + "\n\n" + result);
+            } else {
+                setScript(result);
+            }
+        } else {
+            setScript(result);
+        }
+    } catch (e) {
+        console.error("Transcription failed", e);
+        setError("Audio transcription failed. Please try a different file.");
+    } finally {
+        setIsTranscribing(false);
+    }
+  };
+
+
   const handleUploadClick = () => {
     scriptFileInputRef.current?.click();
   };
 
   const handleLoadProjectClick = () => {
     projectFileInputRef.current?.click();
+  };
+
+  const handleAudioUploadClick = () => {
+      audioFileInputRef.current?.click();
   };
 
   const handleProjectFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -139,7 +185,7 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
     }
   };
 
-  const isSubmitDisabled = !script.trim() || isGenerating;
+  const isSubmitDisabled = !script.trim() || isGenerating || isTranscribing;
 
   return (
     <div className="w-full max-w-6xl p-4 md:p-8 bg-[#1f1f1f] border border-gray-700 rounded-2xl shadow-2xl">
@@ -152,21 +198,29 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
               className="text-xl font-semibold text-gray-200">
               Step 1: The Script
             </label>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={handleLoadProjectClick}
-                disabled={isGenerating}
+                disabled={isGenerating || isTranscribing}
                 className="flex items-center gap-2 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white font-semibold rounded-lg transition-colors text-sm disabled:bg-gray-700 disabled:cursor-not-allowed">
                 Load Project (.json)
               </button>
               <button
                 type="button"
                 onClick={handleUploadClick}
-                disabled={isGenerating}
+                disabled={isGenerating || isTranscribing}
                 className="flex items-center gap-2 px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white font-semibold rounded-lg transition-colors text-sm disabled:bg-gray-700 disabled:cursor-not-allowed">
                 <FileUploadIcon className="w-4 h-4" />
                 <span>Upload Script</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleAudioUploadClick}
+                disabled={isGenerating || isTranscribing}
+                className="flex items-center gap-2 px-3 py-1.5 bg-indigo-700 hover:bg-indigo-600 text-white font-semibold rounded-lg transition-colors text-sm disabled:bg-gray-700 disabled:cursor-not-allowed border border-indigo-500">
+                <FileAudioIcon className="w-4 h-4" />
+                <span>{isTranscribing ? 'Transcribing...' : 'Upload Audio Episode'}</span>
               </button>
             </div>
             <input
@@ -175,7 +229,7 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
               onChange={handleScriptFileUpload}
               className="hidden"
               accept=".txt,.md,.rtf,.pdf,.gdoc"
-              disabled={isGenerating}
+              disabled={isGenerating || isTranscribing}
             />
             <input
               type="file"
@@ -183,20 +237,36 @@ const ProjectSetupForm: React.FC<ProjectSetupFormProps> = ({
               onChange={handleProjectFileSelect}
               className="hidden"
               accept=".json"
-              disabled={isGenerating}
+              disabled={isGenerating || isTranscribing}
+            />
+            <input
+              type="file"
+              ref={audioFileInputRef}
+              onChange={handleAudioFileUpload}
+              className="hidden"
+              accept="audio/*"
+              disabled={isGenerating || isTranscribing}
             />
           </div>
           <p className="text-sm text-gray-400 mb-4">
-            Paste your script, treatment, or creative concept here.
+            Paste your script, upload a text file, or upload an audio episode to auto-transcribe.
           </p>
-          <textarea
-            id="script-input"
-            value={script}
-            onChange={(e) => setScript(e.target.value)}
-            placeholder="Paste your script here..."
-            className="w-full bg-gray-900/50 focus:outline-none resize-y text-base text-gray-200 placeholder-gray-500 min-h-48 rounded-xl p-4 border border-gray-600 focus:ring-2 focus:ring-indigo-500"
-            disabled={isGenerating}
-          />
+          <div className="relative">
+            <textarea
+                id="script-input"
+                value={script}
+                onChange={(e) => setScript(e.target.value)}
+                placeholder="Paste your script here..."
+                className="w-full bg-gray-900/50 focus:outline-none resize-y text-base text-gray-200 placeholder-gray-500 min-h-48 rounded-xl p-4 border border-gray-600 focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                disabled={isGenerating || isTranscribing}
+            />
+            {isTranscribing && (
+                <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center rounded-xl backdrop-blur-sm">
+                    <div className="w-8 h-8 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                    <p className="text-white font-semibold">Listening & Transcribing...</p>
+                </div>
+            )}
+          </div>
         </div>
 
         {/* Asset Library Section - Replaces the old Ingredients box */}
