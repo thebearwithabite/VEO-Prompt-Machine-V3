@@ -41,6 +41,7 @@ import {
   VideoIcon,
   SettingsIcon,
   FastForwardIcon, // New Icon
+  ImagePlusIcon, // New Icon
 } from './icons';
 
 interface ShotCardProps {
@@ -52,6 +53,8 @@ interface ShotCardProps {
   onToggleAssetForShot: (shotId: string, assetId: string) => void;
   onGenerateVideo: (shotId: string) => void;
   onExtendVeoVideo: (originalShotId: string, prompt: string) => void; // New prop
+  onUploadAdHocAsset: (shotId: string, file: File) => void; // New prop
+  onRemoveAdHocAsset: (shotId: string, index: number) => void; // New prop
 }
 
 const ShotCard: React.FC<ShotCardProps> = ({
@@ -63,6 +66,8 @@ const ShotCard: React.FC<ShotCardProps> = ({
   onToggleAssetForShot,
   onGenerateVideo,
   onExtendVeoVideo, // Destructure
+  onUploadAdHocAsset,
+  onRemoveAdHocAsset,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editedJson, setEditedJson] = useState('');
@@ -170,6 +175,13 @@ const ShotCard: React.FC<ShotCardProps> = ({
       setExtendPrompt('');
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files?.[0]) {
+          onUploadAdHocAsset(shot.id, e.target.files[0]);
+          e.target.value = ''; // Reset input
+      }
+  };
+
   const getStatusChip = () => {
     switch (shot.status) {
       case ShotStatus.PENDING_JSON:
@@ -228,6 +240,8 @@ const ShotCard: React.FC<ShotCardProps> = ({
   // Filter assets that have images
   const availableAssets = allAssets.filter(a => !!a.image);
   const selectedAssetIds = shot.selectedAssetIds || [];
+  const adHocAssets = shot.adHocAssets || [];
+  const totalAssetsCount = selectedAssetIds.length + adHocAssets.length;
   
   const showAssetEditor = isEditingAssets || shot.status === ShotStatus.NEEDS_KEYFRAME_GENERATION;
   
@@ -292,7 +306,7 @@ const ShotCard: React.FC<ShotCardProps> = ({
           <div className="mt-4">
             <div className="flex justify-between items-center mb-2">
               <h4 className="text-base font-semibold text-gray-300">
-                Key Assets
+                Key Assets <span className={`text-xs ml-1 ${totalAssetsCount > 3 ? 'text-red-400' : 'text-gray-500'}`}>({totalAssetsCount}/3)</span>
               </h4>
                {!isEditingAssets && (shot.status === ShotStatus.NEEDS_REVIEW || shot.status === ShotStatus.NEEDS_KEYFRAME_GENERATION || shot.status === ShotStatus.GENERATION_FAILED) && (
                 <button
@@ -305,12 +319,17 @@ const ShotCard: React.FC<ShotCardProps> = ({
 
             {showAssetEditor ? (
                <div className="p-3 bg-gray-900/70 rounded-md">
-                 <p className="text-xs text-gray-400 mb-3">
-                  Select assets to include in the prompt (Max 3).
-                 </p>
-                 <div className="flex flex-wrap gap-2">
+                 <div className="flex justify-between mb-2">
+                     <p className="text-xs text-gray-400">Select Global Assets:</p>
+                     <label className="cursor-pointer text-xs text-green-400 hover:text-green-300 flex items-center gap-1">
+                        <ImagePlusIcon className="w-3 h-3" /> Upload Local
+                        <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
+                     </label>
+                 </div>
+                 
+                 <div className="flex flex-wrap gap-2 mb-3">
                    {availableAssets.length === 0 && (
-                     <p className="text-xs text-gray-500 italic">No assets with images available in library.</p>
+                     <p className="text-xs text-gray-500 italic">No global assets available.</p>
                    )}
                    {availableAssets.map(asset => {
                      const isSelected = selectedAssetIds.includes(asset.id);
@@ -334,26 +353,61 @@ const ShotCard: React.FC<ShotCardProps> = ({
                      )
                    })}
                  </div>
+
+                 {/* Ad-Hoc Assets Display */}
+                 {adHocAssets.length > 0 && (
+                     <>
+                        <p className="text-xs text-gray-400 mb-2">Local/Ad-Hoc Assets:</p>
+                        <div className="flex flex-wrap gap-2">
+                            {adHocAssets.map((img, idx) => (
+                                <div key={idx} className="relative group w-12 h-12 border border-gray-600 rounded-lg overflow-hidden">
+                                    <img 
+                                        src={`data:${img.mimeType};base64,${img.base64}`} 
+                                        className="w-full h-full object-cover"
+                                    />
+                                    <button 
+                                        onClick={() => onRemoveAdHocAsset(shot.id, idx)}
+                                        className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 text-white"
+                                    >
+                                        <XMarkIcon className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                     </>
+                 )}
+
                  <div className="mt-3 flex justify-end">
                     <button onClick={() => setIsEditingAssets(false)} className="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded text-white">Done</button>
                  </div>
                </div>
             ) : (
                <div className="flex flex-wrap gap-2 p-3 bg-gray-900/70 rounded-md min-h-[60px]">
-                 {selectedAssetIds.length > 0 ? (
-                    selectedAssetIds.map(id => {
-                      const asset = allAssets.find(a => a.id === id);
-                      if (!asset || !asset.image) return null;
-                      return (
-                        <div key={id} className="relative group w-12 h-12">
-                           <img 
-                             src={`data:${asset.image.mimeType};base64,${asset.image.base64}`} 
-                             className="w-full h-full object-cover rounded-md border border-gray-600"
-                             title={asset.name}
-                           />
-                        </div>
-                      )
-                    })
+                 {totalAssetsCount > 0 ? (
+                    <>
+                        {selectedAssetIds.map(id => {
+                        const asset = allAssets.find(a => a.id === id);
+                        if (!asset || !asset.image) return null;
+                        return (
+                            <div key={id} className="relative group w-12 h-12">
+                            <img 
+                                src={`data:${asset.image.mimeType};base64,${asset.image.base64}`} 
+                                className="w-full h-full object-cover rounded-md border border-gray-600"
+                                title={asset.name}
+                            />
+                            </div>
+                        )
+                        })}
+                        {adHocAssets.map((img, idx) => (
+                            <div key={`adhoc-${idx}`} className="relative group w-12 h-12 border-2 border-green-500/50 rounded-md">
+                                <img 
+                                    src={`data:${img.mimeType};base64,${img.base64}`} 
+                                    className="w-full h-full object-cover rounded-sm"
+                                    title="Local Asset"
+                                />
+                            </div>
+                        ))}
+                    </>
                  ) : (
                     <p className="text-sm text-gray-500 italic self-center">No specific assets assigned.</p>
                  )}
@@ -548,6 +602,9 @@ interface ShotBookDisplayProps {
   onSetVeoApiKey: (key: string) => void;
   onGenerateVideo: (shotId: string) => void;
   onExtendVeoVideo: (originalShotId: string, prompt: string) => void; // New
+  
+  onUploadAdHocAsset: (shotId: string, file: File) => void; // New
+  onRemoveAdHocAsset: (shotId: string, index: number) => void; // New
 }
 
 const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
@@ -577,6 +634,8 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
   onSetVeoApiKey,
   onGenerateVideo,
   onExtendVeoVideo, // Destructure
+  onUploadAdHocAsset,
+  onRemoveAdHocAsset,
 }) => {
   const hasJsonForExport = shotBook.some((shot) => !!shot.veoJson);
   const hasKeyframesForExport = shotBook.some((shot) => !!shot.keyframeImage);
@@ -737,6 +796,8 @@ const ShotBookDisplay: React.FC<ShotBookDisplayProps> = ({
                     onToggleAssetForShot={onToggleAssetForShot}
                     onGenerateVideo={onGenerateVideo}
                     onExtendVeoVideo={onExtendVeoVideo} // Pass
+                    onUploadAdHocAsset={onUploadAdHocAsset}
+                    onRemoveAdHocAsset={onRemoveAdHocAsset}
                   />
                 ))}
               </div>

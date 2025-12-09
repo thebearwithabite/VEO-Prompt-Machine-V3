@@ -21,6 +21,7 @@ import {
   generateVeoJson,
   extractAssetsFromScript,
   refineVeoJson,
+  generateVeoExtensionJson, // New import
 } from './services/geminiService';
 import {
   generateVeoVideo,
@@ -131,7 +132,9 @@ const App: React.FC = () => {
         // Create a lightweight version of the shotbook without heavy images for auto-save
         const lightweightShotBook = shotBook?.map(shot => ({
             ...shot,
-            keyframeImage: undefined // Don't autosave heavy images to prevent quota exceeded
+            keyframeImage: undefined, // Don't autosave heavy images to prevent quota exceeded
+            adHocAssets: undefined,   // Strip ad-hoc uploaded images too
+            ingredientImages: undefined // Strip legacy images
         }));
         
         // Also strip images from assets for auto-save
@@ -154,7 +157,11 @@ const App: React.FC = () => {
         // If quota exceeded, we might want to clear old data or notify user
         if (e instanceof DOMException && e.name === 'QuotaExceededError') {
              // Optional: Try to clear and save only essential data
-             localStorage.removeItem(LOCAL_STORAGE_KEY);
+             try {
+                localStorage.removeItem(LOCAL_STORAGE_KEY);
+             } catch(err) {
+                 console.error("Failed to clear localStorage", err);
+             }
         }
       }
     }
@@ -360,23 +367,21 @@ const App: React.FC = () => {
       }
       setScenePlans(plans);
 
-      // 5. Generate VEO JSON and Keyframes (Iterative)
-      const finalShots = [...shotsWithScenes];
+      // 5. Generate VEO JSON and Keyframes (Iterative with Time Budget Extension)
+      let finalShots: Shot[] = [...shotsWithScenes];
       
+      // We iterate using an index that we might manipulate if we insert extra shots
       for (let i = 0; i < finalShots.length; i++) {
         if (stopGenerationRef.current) break;
         
-        const shot = finalShots[i];
+        let shot = finalShots[i];
         
         // Match Assets Logic
         const matchedAssetIds: string[] = [];
-        // A simple keyword matching strategy
         assets.forEach(asset => {
             const matchesName = shot.pitch.toLowerCase().includes(asset.name.toLowerCase());
-            // You could add description matching here too
             if (matchesName) matchedAssetIds.push(asset.id);
         });
-        // Also check against scene name for locations
         if (shot.sceneName) {
             assets.filter(a => a.type === 'location').forEach(loc => {
                 if (shot.sceneName?.toLowerCase().includes(loc.name.toLowerCase())) {
@@ -388,7 +393,7 @@ const App: React.FC = () => {
 
         // --- Generate VEO JSON ---
         setShotBook((prev) =>
-          prev ? prev.map((s, idx) => idx === i ? { ...s, status: ShotStatus.GENERATING_JSON } : s) : null
+          prev ? prev.map((s) => s.id === shot.id ? { ...s, status: ShotStatus.GENERATING_JSON } : s) : null
         );
         
         // Find relevant Scene Plan
@@ -404,8 +409,77 @@ const App: React.FC = () => {
           updateApiSummary(jsonData.tokens, 'pro');
           
           setShotBook((prev) =>
-             prev ? prev.map((s, idx) => idx === i ? { ...s, veoJson: jsonData.result, status: ShotStatus.PENDING_KEYFRAME_PROMPT } : s) : null
+             prev ? prev.map((s) => s.id === shot.id ? { ...s, veoJson: jsonData.result, status: ShotStatus.PENDING_KEYFRAME_PROMPT } : s) : null
           );
+          
+          // Re-reference the updated shot object
+          shot = finalShots[i];
+
+          // --- EXTENSION LOGIC (Time Budget Check) ---
+          if (relevantPlan && shot.veoJson) {
+              const targetDuration = relevantPlan.goal_runtime_s / relevantPlan.beats.length; // Approximate
+              const currentDuration = shot.veoJson.veo_shot.scene.duration_s || 8;
+              
+              // If this shot represents a long beat, we might need extensions.
+              // Logic: If beat min_s > 8, extend. Or strictly follow plan if we mapped shots to beats (simplified here).
+              // Simplified Trigger: If the generated pitch explicitly asks for a long take OR randomly based on plan policy.
+              // For this demo: If pitch implies "long take" or plan policy criteria met (simulated by random chance if policy allows).
+              const shouldExtend = relevantPlan.extend_policy.allow_extend && 
+                                   (shot.pitch.toLowerCase().includes("long") || Math.random() < 0.3); // 30% chance to extend if allowed
+
+              if (shouldExtend) {
+                  let extensionsNeeded = 1; // Default to 1 extension (total ~16s)
+                  if (shot.pitch.toLowerCase().includes("very long")) extensionsNeeded = 2; // ~24s
+
+                  addLogEntry(`Extend Policy Active: Generating ${extensionsNeeded} extension(s) for ${shot.id}...`, LogType.INFO);
+
+                  let previousJson = shot.veoJson;
+                  for (let ext = 1; ext <= extensionsNeeded; ext++) {
+                       await delay(API_CALL_DELAY_MS);
+                       try {
+                           const extData = await generateVeoExtensionJson(previousJson, relevantPlan);
+                           updateApiSummary(extData.tokens, 'pro');
+                           
+                           // Create new Shot object for the extension
+                           const extId = `${shot.id}_ext_${ext}`;
+                           const extShot: Shot = {
+                               id: extId,
+                               status: ShotStatus.PENDING_KEYFRAME_PROMPT,
+                               pitch: `Extension ${ext} of ${shot.id}`,
+                               sceneName: shot.sceneName,
+                               selectedAssetIds: [...shot.selectedAssetIds],
+                               veoJson: extData.result,
+                               adHocAssets: []
+                           };
+                           
+                           // Ensure shot_id matches unique ID
+                           extShot.veoJson!.veo_shot.shot_id = extId;
+                           
+                           // Insert into finalShots array immediately after current
+                           finalShots.splice(i + 1, 0, extShot);
+                           
+                           // Insert into State
+                           setShotBook(prev => {
+                               if (!prev) return null;
+                               const newBook = [...prev];
+                               const idx = newBook.findIndex(s => s.id === shot.id) + (ext - 1); // Adjust for previously inserted extensions
+                               newBook.splice(idx + 1, 0, extShot);
+                               return newBook;
+                           });
+
+                           previousJson = extData.result; // Chain next extension from this one
+                           
+                           // Note: We don't increment loop 'i' here because we want the main loop to pick up these new shots
+                           // But since we are iterating by index 'i', and we splice *after* i, the next iteration will process the extension!
+                           // This is perfect. The next loop iteration will see finalShots[i+1] which is now the extension.
+                           
+                       } catch (extError) {
+                           console.error("Extension generation failed", extError);
+                           addLogEntry(`Failed to generate extension for ${shot.id}`, LogType.ERROR);
+                       }
+                  }
+              }
+          }
 
           // Update asset matching based on VEO JSON specific fields if available
           if (jsonData.result.veo_shot.character.name && jsonData.result.veo_shot.character.name !== "N/A") {
@@ -417,7 +491,6 @@ const App: React.FC = () => {
           }
           // Prop matching
           assets.filter(a => a.type === 'prop').forEach(prop => {
-             // Check context or behavior safely with optional chaining or default empty string
              const context = (jsonData.result.veo_shot.scene.context || '').toLowerCase();
              const behavior = (jsonData.result.veo_shot.character.behavior || '').toLowerCase();
              if (context.includes(prop.name.toLowerCase()) || behavior.includes(prop.name.toLowerCase())) {
@@ -426,7 +499,6 @@ const App: React.FC = () => {
           });
            // Style matching
           assets.filter(a => a.type === 'style').forEach(style => {
-             // Check visual style safely
              const visualStyle = (jsonData.result.veo_shot.scene.visual_style || '').toLowerCase();
              if (visualStyle.includes(style.name.toLowerCase())) {
                  if (!finalShots[i].selectedAssetIds.includes(style.id)) finalShots[i].selectedAssetIds.push(style.id);
@@ -437,7 +509,7 @@ const App: React.FC = () => {
           console.error(`Error generating JSON for ${shot.id}`, e);
           finalShots[i].status = ShotStatus.GENERATION_FAILED;
            setShotBook((prev) =>
-             prev ? prev.map((s, idx) => idx === i ? { ...s, status: ShotStatus.GENERATION_FAILED } : s) : null
+             prev ? prev.map((s) => s.id === shot.id ? { ...s, status: ShotStatus.GENERATION_FAILED } : s) : null
           );
           continue;
         }
@@ -445,7 +517,7 @@ const App: React.FC = () => {
         // --- Generate Keyframe Prompt ---
         if (createKeyframes) {
              setShotBook((prev) =>
-                prev ? prev.map((s, idx) => idx === i ? { ...s, status: ShotStatus.GENERATING_KEYFRAME_PROMPT } : s) : null
+                prev ? prev.map((s) => s.id === shot.id ? { ...s, status: ShotStatus.GENERATING_KEYFRAME_PROMPT } : s) : null
              );
              await delay(API_CALL_DELAY_MS);
              try {
@@ -454,18 +526,21 @@ const App: React.FC = () => {
                  updateApiSummary(promptData.tokens, 'pro');
                  
                   setShotBook((prev) =>
-                    prev ? prev.map((s, idx) => idx === i ? { ...s, keyframePromptText: promptData.result, status: ShotStatus.GENERATING_IMAGE } : s) : null
+                    prev ? prev.map((s) => s.id === shot.id ? { ...s, keyframePromptText: promptData.result, status: ShotStatus.GENERATING_IMAGE } : s) : null
                   );
 
                  // --- Generate Image ---
                  await delay(API_CALL_DELAY_MS);
                  
-                 // Collect asset images
+                 // Collect asset images + Ad Hoc images
                  const ingredientImages: IngredientImage[] = [];
                  finalShots[i].selectedAssetIds.forEach(id => {
                      const asset = assets.find(a => a.id === id);
                      if (asset && asset.image) ingredientImages.push(asset.image);
                  });
+                 if (finalShots[i].adHocAssets) {
+                     ingredientImages.push(...finalShots[i].adHocAssets!);
+                 }
 
                  // Get aspect ratio from JSON or default to 16:9
                  const aspectRatio = finalShots[i].veoJson?.veo_shot.scene.aspect_ratio || "16:9";
@@ -476,21 +551,21 @@ const App: React.FC = () => {
                  updateApiSummary({input: 0, output: 0}, 'image');
                  
                  setShotBook((prev) =>
-                    prev ? prev.map((s, idx) => idx === i ? { ...s, keyframeImage: imageData.result, status: ShotStatus.NEEDS_REVIEW } : s) : null
-                 );
+                    prev ? prev.map((s) => s.id === shot.id ? { ...s, keyframeImage: imageData.result, status: ShotStatus.NEEDS_REVIEW } : s) : null
+                  );
 
              } catch (e) {
                  console.error(`Error generating image for ${shot.id}`, e);
                  finalShots[i].status = ShotStatus.GENERATION_FAILED;
                  finalShots[i].errorMessage = (e as Error).message;
                   setShotBook((prev) =>
-                    prev ? prev.map((s, idx) => idx === i ? { ...s, status: ShotStatus.GENERATION_FAILED, errorMessage: (e as Error).message } : s) : null
+                    prev ? prev.map((s) => s.id === shot.id ? { ...s, status: ShotStatus.GENERATION_FAILED, errorMessage: (e as Error).message } : s) : null
                   );
              }
         } else {
              finalShots[i].status = ShotStatus.NEEDS_KEYFRAME_GENERATION;
              setShotBook((prev) =>
-                prev ? prev.map((s, idx) => idx === i ? { ...s, status: ShotStatus.NEEDS_KEYFRAME_GENERATION } : s) : null
+                prev ? prev.map((s) => s.id === shot.id ? { ...s, status: ShotStatus.NEEDS_KEYFRAME_GENERATION } : s) : null
              );
         }
       }
@@ -531,6 +606,41 @@ const App: React.FC = () => {
       });
   };
 
+  const handleUploadAdHocAsset = async (shotId: string, file: File) => {
+      try {
+          const base64 = await fileToBase64(file);
+          const mimeType = file.type;
+          setShotBook(prev => {
+              if (!prev) return null;
+              return prev.map(s => {
+                  if (s.id === shotId) {
+                      const currentAdHoc = s.adHocAssets || [];
+                      // Enforce limit of combined assets? For now just append
+                      return { ...s, adHocAssets: [...currentAdHoc, { base64, mimeType }] };
+                  }
+                  return s;
+              });
+          });
+          addLogEntry(`Added local reference image to ${shotId}`, LogType.INFO);
+      } catch (e) {
+          console.error("Ad hoc upload failed", e);
+      }
+  };
+
+  const handleRemoveAdHocAsset = (shotId: string, index: number) => {
+      setShotBook(prev => {
+          if (!prev) return null;
+          return prev.map(s => {
+              if (s.id === shotId) {
+                  const currentAdHoc = s.adHocAssets || [];
+                  return { ...s, adHocAssets: currentAdHoc.filter((_, i) => i !== index) };
+              }
+              return s;
+          });
+      });
+  };
+
+
   const handleGenerateSpecificKeyframe = async (shotId: string) => {
       // Find the shot
       const shotIndex = shotBook?.findIndex(s => s.id === shotId) ?? -1;
@@ -555,12 +665,15 @@ const App: React.FC = () => {
           if (promptText) {
              updateShotStatus(ShotStatus.GENERATING_IMAGE, { keyframePromptText: promptText });
              
-             // Collect assets
+             // Collect assets (Global + Ad Hoc)
              const ingredientImages: IngredientImage[] = [];
              (shot.selectedAssetIds || []).forEach(id => {
                  const asset = assets.find(a => a.id === id);
                  if (asset && asset.image) ingredientImages.push(asset.image);
              });
+             if (shot.adHocAssets) {
+                 ingredientImages.push(...shot.adHocAssets);
+             }
 
              const aspectRatio = shot.veoJson?.veo_shot.scene.aspect_ratio || "16:9";
 
@@ -614,6 +727,8 @@ const App: React.FC = () => {
                  const asset = assets.find(a => a.id === id);
                  if (asset && asset.image) ingredientImages.push(asset.image);
           });
+          if (shot.adHocAssets) ingredientImages.push(...shot.adHocAssets);
+
           const aspectRatio = newJson.veo_shot.scene.aspect_ratio || "16:9";
           const imageData = await generateKeyframeImage(newPrompt, ingredientImages, aspectRatio);
           updateApiSummary({input: 0, output: 0}, 'image');
@@ -891,8 +1006,16 @@ const App: React.FC = () => {
   };
 
   const confirmNewProject = () => {
-      // Clear state but preserve assets logic if needed (Currently clears everything except API key)
-      // Actually, feature request was to KEEP assets.
+      // Default behavior: Keep Assets (User just clicked "Continue")
+      resetProjectState(false);
+  };
+  
+  const confirmNewProjectClearAll = () => {
+      // Secondary behavior: Clear Everything
+      resetProjectState(true);
+  };
+
+  const resetProjectState = (clearAssets: boolean) => {
       setShotBook(null);
       setProjectName(null);
       setLogEntries([]);
@@ -901,8 +1024,10 @@ const App: React.FC = () => {
       setAppState(AppState.IDLE);
       setLastPrompt(null);
       setErrorMessage(null);
-      // NOTE: We do NOT clear assets here, allowing persistence across sessions!
-      // setAssets([]); 
+      
+      if (clearAssets) {
+          setAssets([]);
+      }
       
       localStorage.removeItem(LOCAL_STORAGE_KEY);
       setShowNewProjectDialog(false);
@@ -932,16 +1057,17 @@ const App: React.FC = () => {
       {showApiKeyDialog && (
         <ApiKeyDialog onContinue={() => {
             setShowApiKeyDialog(false);
-            // Trigger logic to open Google's API key selector would go here if not using env
-            // For now, this is just a gate.
         }} />
       )}
       
       <ConfirmDialog 
         isOpen={showNewProjectDialog}
         title="Start New Project?"
-        message={`Are you sure? This will clear the current script and shot list.\n\nYour **Asset Library** will be preserved.`}
+        message={`This will clear the current script and generated shots.\n\nBy default, your **Asset Library** will be kept so you can reuse characters.`}
+        confirmText="Keep Assets & Continue"
         onConfirm={confirmNewProject}
+        secondaryText="Clear Everything"
+        onSecondary={confirmNewProjectClearAll}
         onCancel={() => setShowNewProjectDialog(false)}
       />
 
@@ -1010,7 +1136,10 @@ const App: React.FC = () => {
               veoApiKey={veoApiKey}
               onSetVeoApiKey={setVeoApiKey}
               onGenerateVideo={handleGenerateVeoVideo}
-              onExtendVeoVideo={handleExtendVeoVideo} // Pass the new handler
+              onExtendVeoVideo={handleExtendVeoVideo}
+              
+              onUploadAdHocAsset={handleUploadAdHocAsset}
+              onRemoveAdHocAsset={handleRemoveAdHocAsset}
            />
         )}
         

@@ -43,6 +43,7 @@ import {
   Video, // New
   Settings, // New
   FastForward, // New
+  ImagePlus, // New
 } from 'lucide-react';
 
 const defaultProps = {
@@ -205,7 +206,10 @@ export const FastForwardIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) 
   <FastForward {...defaultProps} {...props} />
 );
 
-// This icon had a different stroke width in the original file, so we preserve it.
+export const ImagePlusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <ImagePlus {...defaultProps} {...props} />
+);
+
 export const CurvedArrowDownIcon: React.FC<React.SVGProps<SVGSVGElement>> = (
   props,
 ) => <ArrowDown {...props} strokeWidth={3} />;

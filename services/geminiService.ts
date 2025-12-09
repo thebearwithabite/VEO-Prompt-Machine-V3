@@ -91,6 +91,17 @@ YOUR TASK:
 }
 `;
 
+const SYSTEM_PROMPT_EXTENSION_JSON = `
+You are a VEO 3.1 Continuity Engine.
+Your task is to generate the NEXT JSON segment for a shot that is being extended.
+1. You will be given the 'PREVIOUS_JSON' and the 'SCENE_PLAN'.
+2. You must create a new JSON with "unit_type": "extend".
+3. The 'shot_id' should be the same as the previous, but with an incremented suffix (handled by system, but you must acknowledge context).
+4. CRITICAL: Maintain strict continuity for 'character.description_lock', 'scene.visual_style', and 'scene.lighting'.
+5. Evolve the 'character.behavior', 'camera.movement', and 'scene.context' slightly to advance time while staying in the same shot.
+6. Return only VALID JSON.
+`;
+
 const SYSTEM_PROMPT_REFINE_JSON = `
 You are a Senior VEO Director. Your task is to modify an existing VEO Shot JSON based on the user's "Director's Feedback".
 1. Read the 'CURRENT_JSON' and the 'DIRECTOR_FEEDBACK'.
@@ -333,6 +344,38 @@ export const generateVeoJson = async (pitch: string, shotId: string, script: str
             output: response.usageMetadata?.candidatesTokenCount || 0
         }
     }
+};
+
+export const generateVeoExtensionJson = async (previousJson: VeoShotWrapper, scenePlan: ScenePlan | null) => {
+    const ai = getAiClient();
+    const scenePlanContext = scenePlan ? JSON.stringify(scenePlan) : "No Scene Plan";
+    const content = `PREVIOUS_JSON: ${JSON.stringify(previousJson)}\nSCENE PLAN: ${scenePlanContext}`;
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-preview',
+        contents: content,
+        config: {
+            systemInstruction: SYSTEM_PROMPT_EXTENSION_JSON,
+            responseMimeType: 'application/json',
+            maxOutputTokens: 8192,
+            temperature: 0.7
+        }
+    });
+
+    let result: VeoShotWrapper;
+    try {
+        result = JSON.parse(response.text || '{}');
+    } catch(e) {
+        throw new Error("Failed to generate extension JSON.");
+    }
+
+    return {
+        result,
+        tokens: {
+            input: response.usageMetadata?.promptTokenCount || 0,
+            output: response.usageMetadata?.candidatesTokenCount || 0
+        }
+    };
 };
 
 export const refineVeoJson = async (currentJson: VeoShotWrapper, feedback: string) => {

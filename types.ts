@@ -142,8 +142,11 @@ export interface Shot {
   keyframeImage?: string; // base64 string
   errorMessage?: string; // If image generation fails
   
-  // New: The IDs of the assets specifically used for this shot.
+  // The IDs of the assets specifically used for this shot (from global library)
   selectedAssetIds: string[]; 
+
+  // Ad-Hoc Assets (local to this shot)
+  adHocAssets?: IngredientImage[];
   
   // Deprecated but kept for compatibility
   ingredientImages?: IngredientImage[];

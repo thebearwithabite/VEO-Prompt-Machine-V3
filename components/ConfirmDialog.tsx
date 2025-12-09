@@ -11,6 +11,9 @@ interface ConfirmDialogProps {
   message: string;
   onConfirm: () => void;
   onCancel: () => void;
+  confirmText?: string;
+  onSecondary?: () => void;
+  secondaryText?: string;
 }
 
 const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
@@ -19,6 +22,9 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   message,
   onConfirm,
   onCancel,
+  confirmText = "Yes, Continue",
+  onSecondary,
+  secondaryText
 }) => {
   if (!isOpen) return null;
 
@@ -32,18 +38,26 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             <h3 className="text-xl font-bold text-white">{title}</h3>
         </div>
         <p className="text-gray-300 mb-8 whitespace-pre-line leading-relaxed pl-1">{message}</p>
-        <div className="flex justify-end gap-3">
+        <div className="flex flex-col sm:flex-row justify-end gap-3">
           <button
             onClick={onCancel}
             className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium transition-colors"
           >
             Cancel
           </button>
+          {onSecondary && secondaryText && (
+             <button
+                onClick={onSecondary}
+                className="px-4 py-2 bg-red-900/50 hover:bg-red-800 text-red-200 border border-red-800/50 rounded-lg font-medium transition-colors"
+             >
+                {secondaryText}
+             </button>
+          )}
           <button
             onClick={onConfirm}
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-medium transition-colors shadow-lg shadow-indigo-500/20"
           >
-            Start New Project
+            {confirmText}
           </button>
         </div>
       </div>
