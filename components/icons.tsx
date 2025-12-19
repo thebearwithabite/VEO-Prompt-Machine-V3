@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -40,10 +41,11 @@ import {
   Clapperboard,
   MessageSquarePlus,
   Terminal,
-  Video, // New
-  Settings, // New
-  FastForward, // New
-  ImagePlus, // New
+  Video,
+  Settings,
+  FastForward,
+  ImagePlus,
+  Link,
 } from 'lucide-react';
 
 const defaultProps = {
@@ -208,6 +210,10 @@ export const FastForwardIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) 
 
 export const ImagePlusIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <ImagePlus {...defaultProps} {...props} />
+);
+
+export const LinkIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
+  <Link {...defaultProps} {...props} />
 );
 
 export const CurvedArrowDownIcon: React.FC<React.SVGProps<SVGSVGElement>> = (

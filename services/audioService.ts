@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -8,6 +9,7 @@ export const transcribeAudio = async (
   audioBase64: string,
   mimeType: string
 ): Promise<{ result: string; tokens: { input: number; output: number } }> => {
+  // Always create a fresh client right before the API call to ensure current key usage
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const prompt = `
@@ -20,7 +22,7 @@ export const transcribeAudio = async (
   `;
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3-flash-preview',
     contents: [
       {
         role: 'user',

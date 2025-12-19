@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -10,6 +11,15 @@ interface ApiKeyDialogProps {
 }
 
 const ApiKeyDialog: React.FC<ApiKeyDialogProps> = ({onContinue}) => {
+  // Use the mandatory window.aistudio API for key selection
+  const handleOpenKeySelector = async () => {
+    if (typeof (window as any).aistudio?.openSelectKey === 'function') {
+      await (window as any).aistudio.openSelectKey();
+    }
+    // Assume success as per race condition guidelines and proceed
+    onContinue();
+  };
+
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
       <div className="bg-gray-800 border border-gray-700 rounded-2xl shadow-xl max-w-lg w-full p-8 text-center flex flex-col items-center">
@@ -44,7 +54,7 @@ const ApiKeyDialog: React.FC<ApiKeyDialogProps> = ({onContinue}) => {
           .
         </p>
         <button
-          onClick={onContinue}
+          onClick={handleOpenKeySelector}
           className="w-full px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition-colors text-lg">
           Continue to Select API Key
         </button>

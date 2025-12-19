@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -10,22 +11,23 @@ export enum AppState {
 }
 
 export enum ShotStatus {
-  PENDING_JSON = 'PENDING_JSON', // Waiting for VEO JSON to be generated
-  GENERATING_JSON = 'GENERATING_JSON', // VEO JSON generation in progress
-  PENDING_KEYFRAME_PROMPT = 'PENDING_KEYFRAME_PROMPT', // JSON created, waiting for keyframe prompt text generation
-  GENERATING_KEYFRAME_PROMPT = 'GENERATING_KEYFRAME_PROMPT', // Keyframe prompt text generation in progress
-  NEEDS_KEYFRAME_GENERATION = 'NEEDS_KEYFRAME_GENERATION', // Keyframe prompt text available, image not yet generated
-  GENERATING_IMAGE = 'GENERATING_IMAGE', // Image generation in progress
-  NEEDS_REVIEW = 'NEEDS_REVIEW', // Image generated, awaiting user approval
-  GENERATION_FAILED = 'GENERATION_FAILED', // Keyframe or JSON generation failed
+  PENDING_JSON = 'PENDING_JSON',
+  GENERATING_JSON = 'GENERATING_JSON',
+  PENDING_KEYFRAME_PROMPT = 'PENDING_KEYFRAME_PROMPT',
+  GENERATING_KEYFRAME_PROMPT = 'GENERATING_KEYFRAME_PROMPT',
+  NEEDS_KEYFRAME_GENERATION = 'NEEDS_KEYFRAME_GENERATION',
+  GENERATING_IMAGE = 'GENERATING_IMAGE',
+  NEEDS_REVIEW = 'NEEDS_REVIEW',
+  APPROVED = 'APPROVED',
+  GENERATION_FAILED = 'GENERATION_FAILED',
 }
 
 export enum VeoStatus {
   IDLE = 'IDLE',
-  QUEUED = 'QUEUED', // Task submitted
-  GENERATING = 'GENERATING', // 0 in API
-  COMPLETED = 'COMPLETED', // 1 in API
-  FAILED = 'FAILED', // 2 or 3 in API
+  QUEUED = 'QUEUED',
+  GENERATING = 'GENERATING',
+  COMPLETED = 'COMPLETED',
+  FAILED = 'FAILED',
 }
 
 export enum LogType {
@@ -35,36 +37,20 @@ export enum LogType {
   STEP = 'STEP',
 }
 
+// Added missing LogEntry interface for director logs
 export interface LogEntry {
   timestamp: string;
   message: string;
   type: LogType;
 }
 
-// From MEMO 1 for ScenePlan + Extend Logic
-export interface ScenePlanBeat {
-  beat_id: string;
-  label: string;
-  priority: number;
-  min_s: number;
-  max_s: number;
-}
+// Added pricing constants for estimated cost calculations in reports
+export const IMAGEN_COST_PER_IMAGE = 0.03;
+export const GEMINI_FLASH_INPUT_COST_PER_MILLION_TOKENS = 0.075;
+export const GEMINI_FLASH_OUTPUT_COST_PER_MILLION_TOKENS = 0.30;
+export const GEMINI_PRO_INPUT_COST_PER_MILLION_TOKENS = 3.50;
+export const GEMINI_PRO_OUTPUT_COST_PER_MILLION_TOKENS = 10.50;
 
-export interface ExtendPolicy {
-  allow_extend: boolean;
-  extend_granularity_s: number;
-  criteria: string[];
-}
-
-export interface ScenePlan {
-  scene_id: string;
-  scene_title: string;
-  goal_runtime_s: number;
-  beats: ScenePlanBeat[];
-  extend_policy: ExtendPolicy;
-}
-
-// Based on VEO 3.1 JSON Schema from user's knowledge doc
 export interface VeoShot {
   shot_id: string;
   scene: {
@@ -85,11 +71,11 @@ export interface VeoShot {
   camera: {
     shot_call: string;
     movement: string;
-    negatives?: string;
   };
   audio: {
     dialogue: string;
     delivery: string;
+    // Added ambience and sfx to support production-ready specs and reporting
     ambience?: string;
     sfx?: string;
   };
@@ -105,17 +91,10 @@ export interface VeoShot {
 
 export interface VeoShotWrapper {
   unit_type: 'shot' | 'extend';
-  chain_id?: string;
-  segment_number?: number;
-  segment_count?: number;
-  target_duration_s?: number;
-  stitching_notes?: string;
-  clip_strategy?: string;
-  directorNotes?: string; // Added for natural language guidance on extend blocks
+  directorNotes?: string;
   veo_shot: VeoShot;
 }
 
-// For uploaded reference images
 export interface IngredientImage {
   base64: string;
   mimeType: string;
@@ -126,52 +105,50 @@ export type AssetType = 'character' | 'location' | 'prop' | 'style';
 export interface ProjectAsset {
   id: string;
   name: string;
-  description: string; // AI inferred description
+  description: string;
   type: AssetType;
-  image: IngredientImage | null; // The uploaded image
+  image: IngredientImage | null;
+  // Semantic Sorting & World Graph Metadata
+  vault_fingerprint?: string; // Dense semantic string
+  visual_anchors?: string[]; // Shared across shots
+  semantic_tags?: string[];
+  episode_id?: string;
+  project_slug?: string;
 }
 
-// The interactive shot object used in the app's state
+// Added missing ScenePlan interface
+export interface ScenePlan {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export interface Shot {
-  id: string; // A unique ID for React keys, from shot_id
+  id: string;
   status: ShotStatus;
-  pitch: string; // The natural language pitch
-  sceneName?: string; // Descriptive name for the scene this shot belongs to
-  veoJson?: VeoShotWrapper; // Now uses the wrapper type
-  keyframePromptText?: string; // The text prompt generated for the keyframe image
-  keyframeImage?: string; // base64 string
-  errorMessage?: string; // If image generation fails
-  
-  // The IDs of the assets specifically used for this shot (from global library)
+  pitch: string;
+  sceneName?: string;
+  veoJson?: VeoShotWrapper;
+  keyframePromptText?: string;
+  keyframeImage?: string;
+  errorMessage?: string;
   selectedAssetIds: string[]; 
-
-  // Ad-Hoc Assets (local to this shot)
-  adHocAssets?: IngredientImage[];
-  
-  // Deprecated but kept for compatibility
-  ingredientImages?: IngredientImage[];
-
-  // VEO VIDEO GENERATION FIELDS
   veoTaskId?: string;
   veoStatus?: VeoStatus;
   veoVideoUrl?: string;
   veoError?: string;
+  veoReferenceUrl?: string;
+  isApproved?: boolean;
+  // Added missing property to fix error in VideoResult.tsx on line 69
+  veoUseKeyframeAsReference?: boolean;
 }
 
 export type ShotBook = Shot[];
 
-// For API call token usage and cost estimation
 export interface ApiCallSummary {
-  pro: number; // Number of Gemini 2.5 Pro calls
-  flash: number; // Number of Gemini 2.5 Flash calls (text generation)
-  image: number; // Number of image generation calls
+  pro: number;
+  flash: number;
+  image: number;
   proTokens: { input: number; output: number; };
   flashTokens: { input: number; output: number; };
 }
-
-// Estimated API pricing (as of a hypothetical latest update - always verify with GCP pricing)
-export const GEMINI_PRO_INPUT_COST_PER_MILLION_TOKENS = 7.00; // USD
-export const GEMINI_PRO_OUTPUT_COST_PER_MILLION_TOKENS = 21.00; // USD
-export const GEMINI_FLASH_INPUT_COST_PER_MILLION_TOKENS = 0.35; // USD
-export const GEMINI_FLASH_OUTPUT_COST_PER_MILLION_TOKENS = 1.05; // USD
-export const IMAGEN_COST_PER_IMAGE = 0.005; // USD per image generated by gemini-2.5-flash-image
