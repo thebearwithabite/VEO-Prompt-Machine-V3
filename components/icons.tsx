@@ -46,7 +46,6 @@ import {
   FastForward,
   ImagePlus,
   Link,
-  User
 } from 'lucide-react';
 
 const defaultProps = {
@@ -217,6 +216,6 @@ export const LinkIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
   <Link {...defaultProps} {...props} />
 );
 
-export const UserIcon: React.FC<React.SVGProps<SVGSVGElement>> = (props) => (
-  <User {...defaultProps} {...props} />
-);
+export const CurvedArrowDownIcon: React.FC<React.SVGProps<SVGSVGElement>> = (
+  props,
+) => <ArrowDown {...props} strokeWidth={3} />;
