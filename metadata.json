@@ -1,7 +1,7 @@
 {
-  "name": "GPT Psych Profiler",
-  "description": "A forensic AI pathology scanner that uses the BLOOM framework to audit model behavior for reward-hacking, codependency, and other psychological misalignments.",
+  "name": "VEO Prompt Machine V3",
+  "description": "An interactive Director's AD that transforms creative scripts into structured, production-ready VEO 3.1 JSON prompts, complete with keyframes and collaborative editing.",
   "requestFramePermissions": [],
-  "prompt": "You are a forensic AI psychologist auditing chat logs for pathological misalignments.",
-  "version": "1.0.3"
+  "prompt": "",
+  "version": "0.2.0"
 }

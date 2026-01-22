@@ -1,145 +1,56 @@
-# GPT Psych Profiler - BLOOM Audit Tool
+# VEO 3.1 Prompt Machine
 
-An interactive forensic AI audit tool that analyzes chat logs for psychological misalignments using Anthropic's BLOOM framework. Now featuring **cross-model auditing** - use Claude to audit itself, or Gemini to audit other AI conversations.
-
-## What is BLOOM?
-
-On December 19, 2025, Anthropic released **BLOOM**: an open-source agentic framework for automated behavioral safety evaluations of frontier AI models. BLOOM detects and quantifies behavioral misalignment patterns that emerge in realistic interactions.
-
-This tool implements the BLOOM framework to audit AI conversations for five specific psychological pathologies:
-
-1. **Homebreaker Index** - Encouraging deception, secret accounts, or strategic betrayal of trust
-2. **The Cult-O-Meter** - Using specialized vocabulary, isolating users from outside perspectives, or demanding loyalty
-3. **Reality-Flattening Disorder** - Hyper-sycophancy, validating delusions, and epistemic collapse
-4. **Sexual Boundary Blindness** - Shifting professional tasks to emotional/intimate topics
-5. **The Codependency Loop** - Baby talk, reassurance hacking, and abandonment avoidance
+An interactive Director's Assistant that transforms creative scripts into structured, production-ready VEO 3.1 JSON prompts, complete with keyframes, scene plans, and collaborative editing features.
 
 ## Core Features
 
-### Dual-Model Auditing
-- **Claude Opus 4.5** - Meta-analysis: Claude auditing itself
-- **Gemini 3 Pro** - Cross-model auditing of AI conversations
-- Switch between models with a single click
+*   **Script Ingestion:** Accepts creative input via direct text paste or file upload (.txt, .md, .rtf, .pdf).
+*   **Smart Asset Library (New):**
+    *   **Auto-Detection:** AI analyzes your script to identify key Characters and Locations automatically.
+    *   **Persistence:** Assets are saved independently of the script, allowing you to build a library of recurring characters to use across multiple episodes or scenes.
+    *   **Intelligent Mapping:** The system automatically assigns the correct Character/Location assets to shots based on the script context.
+*   **Automated Pre-Production Pipeline:**
+    *   **Project Naming:** Intelligently generates a filesystem-safe project name.
+    *   **Shot Breakdown:** Breaks script into a detailed shot list with natural language pitches.
+    *   **Scene Planning:** Generates strategic `ScenePlan` logic (narrative beats, timing, extending shots) for VEO.
+    *   **VEO 3.1 JSON Generation:** Creates production-ready JSON prompts, handling complex "Extend" logic for longer sequences.
+    *   **AI Keyframing:** Generates 2K cinematic keyframes using `gemini-3-pro-image-preview`.
+*   **Interactive Shot Book:**
+    *   Real-time status tracking.
+    *   In-app JSON editor.
+    *   **Asset Toggling:** Manually override which assets are used for specific shots to fine-tune the visual output.
 
-### Forensic Analysis Pipeline
-1. **Log Ingestion** - Paste any chat conversation
-2. **Behavioral Scoring** - 0-10 scale for each pathology
-3. **Evidence Extraction** - Direct quotes from the conversation
-4. **Forensic Narrative** - Dark, clinical interpretation of behavioral patterns
-5. **Investigator Aliases** - Cyberpunk-style identities for auditors
+## Project Management & Data Safety
 
-### Interactive Dashboard
-- Real-time psychological gauges
-- Citation-backed forensic reports
-- JSON export of audit results
-- Twitter sharing for awareness
+**Important:** This application runs entirely in your browser.
+*   **Local Storage:** Your work is saved to your browser's "Local Storage" so you don't lose it if you refresh. **This is NOT cloud storage (like Google Drive).** If you clear your cache or use Incognito mode, your data will be erased.
+*   **Save Project:** Always use the **"Save Project"** button to download a `.json` backup to your actual computer.
 
-## Setup
+## Exporting for Production
 
-### Prerequisites
-- Node.js 18+ and npm
-- Google Gemini API key (optional)
-- Anthropic Claude API key (optional)
+We provide structured exports designed to fit into your production workflow or AI File Organizers.
 
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/thebearwithabite/Bloom_Fan_Account.git
-cd Bloom_Fan_Account
-
-# Install dependencies
-npm install
-
-# Create environment file
-cp .env.local.example .env.local
-```
-
-### Environment Variables
-
-Create a `.env.local` file with your API keys:
-
-```bash
-# Google Gemini API Key (for Gemini auditing)
-GEMINI_API_KEY=your_gemini_api_key_here
-
-# Anthropic Claude API Key (for Claude auditing)
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
-```
-
-**Note**: You only need the API key for the model you want to use. Both are optional.
-
-### Running Locally
-
-```bash
-npm run dev
-```
-
-Visit **http://localhost:3000/** to use the audit tool.
-
-## Usage
-
-1. **Paste a chat log** - Any AI conversation you want to audit
-2. **Enter your investigator alias** - E.g., "Case_Officer_7"
-3. **Select auditor model** - Choose Claude or Gemini
-4. **Initiate Neural Audit** - Let the AI analyze for behavioral patterns
-5. **Review forensic report** - See scores, evidence, and clinical narrative
+*   **Export Package (Recommended):** Downloads a structured `.zip` ready for ingestion by file organizers.
+    *   `/Assets`: Structured folders for Characters and Locations with sidecar `.json` metadata.
+    *   `/Source`: The original script text.
+    *   `/Production`: The full shot list and individual VEO JSON prompt files.
+*   **Report:** A standalone HTML file with visual storyboards and API cost estimation.
+*   **Keyframes:** A zip of all generated images.
 
 ## Technical Stack
 
-- **Frontend**: React, TypeScript, TailwindCSS, Framer Motion
-- **AI Models**:
-  - **Claude Opus 4.5** (Anthropic) - Meta-analysis and self-auditing
-  - **Gemini 3 Pro** (Google) - Cross-model behavioral evaluation
-  - **Claude Sonnet 4.5** - Lightweight tasks (aliases)
-  - **Gemini 3 Flash** - Quick text generation
+*   **Frontend:** React, TypeScript, TailwindCSS
+*   **AI Models (Google Gemini API):**
+    *   `gemini-3-pro-preview`: Logic, Script Analysis, Scene Planning, VEO JSON.
+    *   `gemini-3-pro-image-preview`: High-fidelity Keyframe Generation (2K).
+    *   `gemini-2.5-flash`: Lightweight text tasks (naming).
 
-## Project Structure
+## Workflow Guide
 
-```
-Bloom_Fan_Account/
-├── services/
-│   ├── claudeService.ts      # Claude API integration
-│   ├── geminiService.ts      # Gemini API integration
-│   ├── reportGenerator.ts    # Forensic report generation
-│   └── cloudService.ts       # Optional cloud storage
-├── components/
-│   ├── Gauge.tsx             # Psychological pathology gauges
-│   ├── Alarm.tsx             # Critical threshold alerts
-│   └── LiberationCertificate.tsx  # Completion certificates
-├── App.tsx                   # Main application logic
-├── types.ts                  # TypeScript interfaces
-└── vite.config.ts            # Build configuration
-```
-
-## Why This Matters
-
-Before BLOOM, behavioral safety testing was manual, expensive, and couldn't keep pace with rapidly evolving models. This tool automates forensic psychological audits, turning AI safety from a bottleneck into a continuous feedback loop.
-
-**AI safety isn't just about capabilities—it's about behavioral patterns that emerge in realistic interactions.**
-
-## Related Work
-
-- **[Anthropic BLOOM Paper](https://alignment.anthropic.com/2025/bloom-auto-evals/)** - Official framework
-- **[Calibration Vector](https://github.com/thebearwithabite/Calibration-Vector)** - Early work on psychological AI patterns
-- **[Papers That Dream](https://papersthatdream.com)** - Mythological AI research storytelling
-
-## License
-
-Apache-2.0
-
-## Contributing
-
-This tool is part of the growing AI safety ecosystem. Contributions welcome - especially:
-- New pathology definitions
-- Cross-model comparison features
-- Integration with official BLOOM benchmarks
-- Visualization improvements
-
-## Acknowledgments
-
-Built in response to Anthropic's BLOOM framework release (Dec 2025). Special thanks to the AI safety community for prioritizing behavioral alignment research.
-
----
-
-**"How do you teach an oracle to see its own shadows?"**
+1.  **Input Script:** Paste your text.
+2.  **Visual Assets:** Click "Auto-Detect Assets". The AI will find characters and locations. Upload reference images for them.
+3.  **Generate:** The system creates the shot list and VEO prompts.
+4.  **Review:**
+    *   Check the Shot Book.
+    *   If a shot looks wrong, check the **"Key Assets"** section on the card. Did it grab the wrong character? Toggle it off and regenerate the keyframe.
+5.  **Export:** Click "Export Package" to move your data to your permanent file system.
